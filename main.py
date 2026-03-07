@@ -51,6 +51,7 @@ class RadioAgent:
         self.tts = TTSService(
             elevenlabs_key=CONFIG["ELEVENLABS_API_KEY"],
             openai_key=CONFIG.get("OPENAI_API_KEY"),
+            speed=CONFIG.get("TTS_SPEED", 1.1),
         )
         self.stt = STTService(openai_key=CONFIG.get("OPENAI_API_KEY"))
         self.player = AudioPlayer()
