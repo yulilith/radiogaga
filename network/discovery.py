@@ -59,7 +59,14 @@ class AgentDiscovery:
         if self._service_info:
             props = dict(self._service_info.properties)
             props[b"channel"] = channel.encode()
-            self._service_info.properties = props
+            self._service_info = ServiceInfo(
+                self._service_info.type,
+                self._service_info.name,
+                server=self._service_info.server,
+                addresses=self._service_info.addresses,
+                port=self._service_info.port,
+                properties=props,
+            )
             self.zeroconf.update_service(self._service_info)
 
     def start_browsing(self, on_peer_found: Callable = None,

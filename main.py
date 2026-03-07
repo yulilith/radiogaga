@@ -141,7 +141,13 @@ class RadioAgent:
     def _on_input_event(self, event: InputEvent):
         """Handle hardware input events (may be called from GPIO thread)."""
         if self._loop:
-            asyncio.run_coroutine_threadsafe(self._handle_event(event), self._loop)
+            asyncio.run_coroutine_threadsafe(self._safe_handle_event(event), self._loop)
+
+    async def _safe_handle_event(self, event: InputEvent):
+        try:
+            await self._handle_event(event)
+        except Exception as e:
+            logger.error("Unhandled exception in event handler: %s", e, exc_info=True)
 
     async def _handle_event(self, event: InputEvent):
         """Process an input event."""
@@ -194,7 +200,10 @@ class RadioAgent:
         self.active_channel = channel
         self.active_subchannel = resolve_subchannel(channel, self.input.dial_position)
         self.leds.activate(channel)
-        self.discovery.update_channel(channel)
+        try:
+            self.discovery.update_channel(channel)
+        except Exception as e:
+            logger.warning("Discovery update failed (non-fatal): %s", e)
 
         # Start new content generation
         new_ch = self.channels[channel]
