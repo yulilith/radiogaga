@@ -1,0 +1,17 @@
+{"timestamp": "2026-03-07T18:02:05.622382+00:00", "event_name": "hub_started", "payload": {"host": "127.0.0.1", "port": 8765, "expected_agents": ["agent_a", "agent_b"]}}
+{"timestamp": "2026-03-07T18:02:06.138178+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_a", "role": "agent", "agent_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:02:06.230612+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_b", "role": "agent", "agent_id": "agent_b"}}
+{"timestamp": "2026-03-07T18:02:06.231137+00:00", "event_name": "session_started", "payload": {"session_id": "session_832fe43271c04479a2e089746bbd909c", "topic": "Should local-first AI devices prioritize privacy over personalization?", "max_turns": 8}}
+{"timestamp": "2026-03-07T18:02:06.231506+00:00", "event_name": "turn_requested", "payload": {"session_id": "session_832fe43271c04479a2e089746bbd909c", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:02:06.247246+00:00", "event_name": "turn_generation_started", "payload": {"session_id": "session_832fe43271c04479a2e089746bbd909c", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:02:06.249817+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector", "role": "injector", "agent_id": null}}
+{"timestamp": "2026-03-07T18:02:09.236145+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector_once", "role": "injector", "agent_id": null}}
+{"timestamp": "2026-03-07T18:02:09.237068+00:00", "event_name": "user_message_injected", "payload": {"session_id": "session_832fe43271c04479a2e089746bbd909c", "text": "Push harder on the privacy tradeoff", "author": "user"}}
+{"timestamp": "2026-03-07T18:02:09.237518+00:00", "event_name": "client_unregistered", "payload": {"client_id": "cli_injector_once", "role": "injector"}}
+{"timestamp": "2026-03-07T18:02:40.968885+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector_once", "role": "injector", "agent_id": null}}
+{"timestamp": "2026-03-07T18:02:40.970351+00:00", "event_name": "user_message_injected", "payload": {"session_id": "session_832fe43271c04479a2e089746bbd909c", "text": "Push harder on the privacy tradeoff", "author": "user"}}
+{"timestamp": "2026-03-07T18:02:40.970863+00:00", "event_name": "client_unregistered", "payload": {"client_id": "cli_injector_once", "role": "injector"}}
+{"timestamp": "2026-03-07T18:02:58.764832+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_b", "role": "agent"}}
+{"timestamp": "2026-03-07T18:02:58.766682+00:00", "event_name": "client_unregistered", "payload": {"client_id": "cli_injector", "role": "injector"}}
+{"timestamp": "2026-03-07T18:02:58.768168+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_a", "role": "agent"}}
+{"timestamp": "2026-03-07T18:02:58.768512+00:00", "event_name": "hub_stopped", "payload": {}}

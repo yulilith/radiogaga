@@ -1,0 +1,15 @@
+{"timestamp": "2026-03-07T18:26:11.577198+00:00", "event_name": "hub_started", "payload": {"host": "127.0.0.1", "port": 8765, "expected_agents": ["agent_a", "agent_b"]}}
+{"timestamp": "2026-03-07T18:26:11.727621+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_a", "role": "agent", "agent_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:26:11.728266+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_b", "role": "agent", "agent_id": "agent_b"}}
+{"timestamp": "2026-03-07T18:26:11.728683+00:00", "event_name": "session_started", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "topic": "Should local-first AI devices prioritize privacy over personalization?", "max_turns": 8}}
+{"timestamp": "2026-03-07T18:26:11.729048+00:00", "event_name": "turn_requested", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:26:11.731393+00:00", "event_name": "turn_generation_started", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:26:11.733005+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector", "role": "injector", "agent_id": null}}
+{"timestamp": "2026-03-07T18:26:14.083252+00:00", "event_name": "turn_generation_completed", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "turn_index": 1, "speaker_id": "agent_a", "text_preview": "API Error (claude-haiku-4-5): 400 The provided model identifier is invalid.. Run --model to pick a different model."}}
+{"timestamp": "2026-03-07T18:26:14.083509+00:00", "event_name": "tts_started", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:26:14.891091+00:00", "event_name": "tts_completed", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "turn_index": 1, "speaker_id": "agent_a", "audio_path": "/Users/marco@sierra.ai/playground/radio/.radioagent/audio/agent_a/session_755b0663ff6645e2b87eb4f25ff284cb_agent_a_1.mp3", "tts_provider": "elevenlabs"}}
+{"timestamp": "2026-03-07T18:26:14.891344+00:00", "event_name": "playback_started", "payload": {"session_id": "session_755b0663ff6645e2b87eb4f25ff284cb", "turn_index": 1, "speaker_id": "agent_a", "audio_path": "/Users/marco@sierra.ai/playground/radio/.radioagent/audio/agent_a/session_755b0663ff6645e2b87eb4f25ff284cb_agent_a_1.mp3"}}
+{"timestamp": "2026-03-07T18:26:20.282227+00:00", "event_name": "client_unregistered", "payload": {"client_id": "cli_injector", "role": "injector"}}
+{"timestamp": "2026-03-07T18:26:20.282761+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_b", "role": "agent"}}
+{"timestamp": "2026-03-07T18:26:20.283097+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_a", "role": "agent"}}
+{"timestamp": "2026-03-07T18:26:20.283579+00:00", "event_name": "hub_stopped", "payload": {}}
