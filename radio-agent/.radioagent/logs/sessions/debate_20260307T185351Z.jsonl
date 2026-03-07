@@ -1,0 +1,15 @@
+{"timestamp": "2026-03-07T18:53:51.680566+00:00", "event_name": "hub_started", "payload": {"host": "127.0.0.1", "port": 8765, "expected_agents": ["agent_a", "agent_b"]}}
+{"timestamp": "2026-03-07T18:53:52.317942+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_a", "role": "agent", "agent_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:53:52.542274+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_b", "role": "agent", "agent_id": "agent_b"}}
+{"timestamp": "2026-03-07T18:53:52.542772+00:00", "event_name": "session_started", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "topic": "who is the best F1 driver of modern day", "max_turns": 8}}
+{"timestamp": "2026-03-07T18:53:52.543344+00:00", "event_name": "turn_requested", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:53:52.546013+00:00", "event_name": "turn_generation_started", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:53:52.547002+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector", "role": "injector", "agent_id": null}}
+{"timestamp": "2026-03-07T18:53:55.262871+00:00", "event_name": "turn_generation_completed", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "turn_index": 1, "speaker_id": "agent_a", "text_preview": "Alright, so we're kicking this off\u2014and look, everyone's going to throw Verstappen at me, but I want to push back on the "}}
+{"timestamp": "2026-03-07T18:53:55.263199+00:00", "event_name": "tts_started", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:53:56.525771+00:00", "event_name": "tts_completed", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "turn_index": 1, "speaker_id": "agent_a", "audio_path": "/Users/marco@sierra.ai/playground/radio/.radioagent/audio/agent_a/session_bcea7c34012440f1a9aebdac1ec73360_agent_a_1.mp3", "tts_provider": "elevenlabs"}}
+{"timestamp": "2026-03-07T18:53:56.526476+00:00", "event_name": "playback_started", "payload": {"session_id": "session_bcea7c34012440f1a9aebdac1ec73360", "turn_index": 1, "speaker_id": "agent_a", "audio_path": "/Users/marco@sierra.ai/playground/radio/.radioagent/audio/agent_a/session_bcea7c34012440f1a9aebdac1ec73360_agent_a_1.mp3"}}
+{"timestamp": "2026-03-07T18:54:01.792535+00:00", "event_name": "client_unregistered", "payload": {"client_id": "cli_injector", "role": "injector"}}
+{"timestamp": "2026-03-07T18:54:01.793744+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_b", "role": "agent"}}
+{"timestamp": "2026-03-07T18:54:01.794135+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_a", "role": "agent"}}
+{"timestamp": "2026-03-07T18:54:01.794474+00:00", "event_name": "hub_stopped", "payload": {}}

@@ -1,0 +1,9 @@
+{"timestamp": "2026-03-07T18:22:20.697480+00:00", "event_name": "hub_started", "payload": {"host": "127.0.0.1", "port": 8765, "expected_agents": ["agent_a", "agent_b"]}}
+{"timestamp": "2026-03-07T18:22:20.839323+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_b", "role": "agent", "agent_id": "agent_b"}}
+{"timestamp": "2026-03-07T18:22:20.839929+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_a", "role": "agent", "agent_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:22:20.840383+00:00", "event_name": "session_started", "payload": {"session_id": "session_1ab25174ab654c10b51a456c5214296e", "topic": "Should local-first AI devices prioritize privacy over personalization?", "max_turns": 8}}
+{"timestamp": "2026-03-07T18:22:20.841039+00:00", "event_name": "turn_requested", "payload": {"session_id": "session_1ab25174ab654c10b51a456c5214296e", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:22:20.843892+00:00", "event_name": "turn_generation_started", "payload": {"session_id": "session_1ab25174ab654c10b51a456c5214296e", "turn_index": 1, "speaker_id": "agent_a"}}
+{"timestamp": "2026-03-07T18:22:20.845410+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector", "role": "injector", "agent_id": null}}
+{"timestamp": "2026-03-07T18:22:23.419660+00:00", "event_name": "turn_failed", "payload": {"session_id": "session_1ab25174ab654c10b51a456c5214296e", "turn_index": 1, "speaker_id": "agent_a", "error": "Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"}}
+{"timestamp": "2026-03-07T18:22:23.420110+00:00", "event_name": "client_unregistered", "payload": {"client_id": "agent_a", "role": "agent"}}

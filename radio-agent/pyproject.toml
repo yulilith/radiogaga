@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "radioagent"
+version = "0.1.0"
+description = "Local-first realtime multi-agent debate system"
+readme = "initial-plan.md"
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic",
+  "claude-agent-sdk",
+  "elevenlabs",
+  "pydantic",
+  "PyYAML",
+  "python-dotenv",
+  "websockets",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["radioagent"]
