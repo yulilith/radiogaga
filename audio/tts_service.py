@@ -13,11 +13,13 @@ class TTSService:
 
     def __init__(self, elevenlabs_key: str, openai_key: str | None = None,
                  model: str = "eleven_flash_v2_5",
-                 output_format: str = "mp3_22050_32"):
+                 output_format: str = "mp3_22050_32",
+                 speed: float = 1.1):
         self.elevenlabs_key = elevenlabs_key
         self.openai_key = openai_key
         self.model = model
         self.output_format = output_format
+        self.speed = speed
         self.base_url = "https://api.elevenlabs.io/v1"
         self._use_fallback = False
 
@@ -28,6 +30,7 @@ class TTSService:
         voice = voice_id or "pNInz6obpgDQGcFmaJgB"  # Default: Adam
         logger.debug("Synthesizing speech", extra={
             "voice_id": voice, "text_length": len(text),
+            "speed": self.speed,
         })
 
         if self._use_fallback and self.openai_key:
@@ -48,6 +51,7 @@ class TTSService:
             "voice_settings": {
                 "stability": 0.5,
                 "similarity_boost": 0.75,
+                "speed": self.speed,
             },
             "optimize_streaming_latency": 3,
         }

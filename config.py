@@ -28,6 +28,7 @@ CONFIG = {
     # TTS Settings
     "TTS_MODEL": "eleven_flash_v2_5",
     "TTS_OUTPUT_FORMAT": "mp3_22050_32",
+    "TTS_SPEED": float(os.getenv("RADIO_ELEVENLABS_SPEED", "1.1")),
     "TTS_LATENCY_OPTIMIZATION": 3,
 
     # Audio Settings
