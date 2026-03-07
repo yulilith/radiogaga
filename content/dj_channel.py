@@ -74,6 +74,13 @@ INSTRUCTIONS:
         logger.info("DJ stream_content started", extra={"subchannel": subchannel})
         voice_id = self.get_voice_id(subchannel)
 
+        if self.spotify:
+            device = await self.spotify.ensure_device()
+            if device:
+                logger.info("Spotify device ready for DJ", extra={"device_id": device})
+            else:
+                logger.warning("No Spotify device found, will fall back to local music or banter-only")
+
         # Build initial set list
         await self._build_set_list(subchannel)
 
