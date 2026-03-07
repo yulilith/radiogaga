@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+assets/music/*.mp3
+assets/jingles/*.mp3
+.cache-*
+.spotify_cache
