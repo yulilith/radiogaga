@@ -10,6 +10,7 @@ import sys
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from log import setup_logging, get_logger
 from config import CONFIG
 from hardware.input_controller import InputController, InputEvent
 from hardware.led_controller import LEDController
@@ -30,6 +31,8 @@ from network.peer_comm import (
     PeerServer, PeerClient,
     msg_cohost_prompt, msg_cohost_response, msg_callin_forward,
 )
+
+logger = get_logger("main")
 
 
 class RadioAgent:
@@ -61,9 +64,9 @@ class RadioAgent:
                     client_secret=CONFIG["SPOTIFY_CLIENT_SECRET"],
                     redirect_uri=CONFIG.get("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback"),
                 )
-                print(f"[Radio] Spotify connected")
+                logger.info("Spotify connected")
             except Exception as e:
-                print(f"[Radio] Spotify init failed: {e}")
+                logger.error("Spotify init failed: %s", e)
 
         self.music_manager = MusicManager()
 
@@ -119,7 +122,7 @@ class RadioAgent:
     async def _handle_callin_forward(self, data: dict) -> dict:
         """A caller from another radio is calling into our show."""
         transcript = data.get("transcript", "")
-        print(f"[Radio] Remote caller says: {transcript}")
+        logger.info("Remote caller says: %s", transcript)
 
         channel = self.channels.get(self.active_channel)
         async for chunk in channel.handle_callin(transcript):
@@ -131,7 +134,7 @@ class RadioAgent:
     async def _handle_hello(self, data: dict) -> dict:
         """Another agent introduced itself."""
         peer_id = data.get("agent_id", "?")
-        print(f"[Radio] Peer {peer_id} says hello! Channel: {data.get('current_channel')}")
+        logger.info("Peer %s says hello! Channel: %s", peer_id, data.get('current_channel'))
         return {"type": "hello", "agent_id": self.agent_id,
                 "current_channel": self.active_channel}
 
@@ -150,11 +153,11 @@ class RadioAgent:
 
         elif event.event_type == "volume_change":
             self.player.volume = event.volume / 100.0
-            print(f"[Radio] Volume: {event.volume}%")
+            logger.info("Volume: %d%%", event.volume)
 
         elif event.event_type == "volume_mute":
             self.player.toggle_mute()
-            print(f"[Radio] {'Muted' if self.player.muted else 'Unmuted'}")
+            logger.info("Muted" if self.player.muted else "Unmuted")
 
         elif event.event_type == "callin_start":
             self.leds.set_callin(True)
@@ -168,7 +171,7 @@ class RadioAgent:
         if channel == self.active_channel:
             return
 
-        print(f"[Radio] Switching to: {CHANNELS[channel]['name']}")
+        logger.info("Switching to: %s", CHANNELS[channel]['name'])
 
         # Cancel current generation
         if self._generation_task:
@@ -207,7 +210,7 @@ class RadioAgent:
             return
 
         name = get_subchannel_name(self.active_channel, subchannel)
-        print(f"[Radio] Tuning to: {name}")
+        logger.info("Tuning to: %s", name)
 
         # Cancel and restart
         if self._generation_task:
@@ -236,9 +239,9 @@ class RadioAgent:
             self.leds.set_callin(False)
             return
 
-        print("[Radio] Transcribing call-in...")
+        logger.info("Transcribing call-in...")
         transcript = await self.stt.transcribe(audio_bytes, format="wav")
-        print(f"[Radio] Caller said: {transcript}")
+        logger.info("Caller said: %s", transcript)
         self.leds.set_callin(False)
 
         if not transcript.strip():
@@ -249,7 +252,7 @@ class RadioAgent:
         if peers:
             # Forward to first peer
             peer = peers[0]
-            print(f"[Radio] Forwarding call-in to peer {peer['agent_id']}")
+            logger.info("Forwarding call-in to peer %s", peer['agent_id'])
             await self.peer_client.send_to_peer(
                 peer, msg_callin_forward(transcript, self.agent_id)
             )
@@ -280,14 +283,14 @@ class RadioAgent:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print(f"[Radio] Content generation error: {e}")
+            logger.error("Content generation error: %s", e)
 
     async def _check_cohost(self):
         """If a peer is on the same channel, initiate co-host mode."""
         peers = self.discovery.get_peers_on_channel(self.active_channel)
         if peers and self.active_channel == "talkshow":
             peer = peers[0]
-            print(f"[Radio] Co-hosting with peer {peer['agent_id']}!")
+            logger.info("Co-hosting with peer %s!", peer['agent_id'])
             # Co-host mode will be triggered automatically when content generates
             # The content loop generates statements, and we send them to the peer
 
@@ -315,31 +318,44 @@ class RadioAgent:
         # Start network services
         self.discovery.register(channel=self.active_channel)
         self.discovery.start_browsing(
-            on_peer_found=lambda p: print(f"[Radio] Peer found: {p['agent_id']}"),
-            on_peer_lost=lambda p: print(f"[Radio] Peer lost: {p['agent_id']}"),
+            on_peer_found=lambda p: logger.info("Peer found: %s", p['agent_id']),
+            on_peer_lost=lambda p: logger.info("Peer lost: %s", p['agent_id']),
         )
         await self.peer_server.start()
 
         # Set initial state
         self.leds.activate(self.active_channel)
 
-        print(f"\n{'='*50}")
-        print(f"  RadioAgent {self.agent_id} is ON THE AIR")
-        print(f"  Channel: {CHANNELS[self.active_channel]['name']}")
-        print(f"{'='*50}\n")
+        logger.info("=" * 50)
+        logger.info("  RadioAgent %s is ON THE AIR", self.agent_id)
+        logger.info("  Channel: %s", CHANNELS[self.active_channel]['name'])
+        logger.info("=" * 50)
 
         # Start content generation
         self._generation_task = asyncio.create_task(self._content_loop())
 
         # Start keyboard simulator if not on Pi
         if not self.input._use_gpio:
-            keyboard_task = asyncio.create_task(self.input.run_keyboard_simulator())
+            async def _keyboard_then_stop():
+                await self.input.run_keyboard_simulator()
+                # Keyboard simulator exited (user pressed q / Ctrl+C)
+                self._stop_event.set()
+            keyboard_task = asyncio.create_task(_keyboard_then_stop())
         else:
             keyboard_task = None
 
-        # Wait for shutdown signal
+        # Wait for shutdown signal (Ctrl+C or 'q' from keyboard sim)
+        self._sigint_count = 0
+
         def _signal_handler():
-            self._stop_event.set()
+            self._sigint_count += 1
+            if self._sigint_count == 1:
+                logger.info("Ctrl+C received, shutting down gracefully...")
+                self._stop_event.set()
+            else:
+                # Second Ctrl+C = force exit
+                logger.warning("Force exit!")
+                os._exit(1)
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             self._loop.add_signal_handler(sig, _signal_handler)
@@ -349,7 +365,7 @@ class RadioAgent:
 
     async def shutdown(self):
         """Clean up all resources."""
-        print("\n[Radio] Shutting down...")
+        logger.info("Shutting down...")
 
         if self._generation_task:
             self._generation_task.cancel()
@@ -365,11 +381,13 @@ class RadioAgent:
         self.leds.cleanup()
         self.input.cleanup()
 
-        print("[Radio] RadioAgent signing off. Goodbye!")
+        logger.info("RadioAgent signing off. Goodbye!")
 
 
 def main():
     """Entry point."""
+    setup_logging()
+
     # Check for required API keys
     missing = []
     if not CONFIG.get("ANTHROPIC_API_KEY"):
@@ -378,8 +396,8 @@ def main():
         missing.append("ELEVENLABS_API_KEY")
 
     if missing:
-        print(f"Missing required API keys: {', '.join(missing)}")
-        print("Copy .env.example to .env and fill in your keys.")
+        logger.error("Missing required API keys: %s", ", ".join(missing))
+        logger.error("Copy .env.example to .env and fill in your keys.")
         sys.exit(1)
 
     agent = RadioAgent()

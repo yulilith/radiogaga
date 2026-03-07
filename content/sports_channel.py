@@ -1,7 +1,11 @@
+import time
 from typing import AsyncGenerator
 
 from content.agent import BaseChannel, ContentChunk, BASE_SYSTEM_PROMPT
 from context.sports import get_scores
+from log import get_logger, log_api_call
+
+logger = get_logger(__name__)
 
 
 class SportsChannel(BaseChannel):
@@ -47,7 +51,9 @@ INSTRUCTIONS:
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         """Override to fetch sport-specific scores before generating."""
         # Fetch fresh scores for this specific sport
+        logger.info("fetching sport-specific scores", extra={"sport": subchannel})
         scores = await get_scores(subchannel)
+        logger.info("scores fetched", extra={"sport": subchannel, "score_count": len(scores) if scores else 0})
 
         # Update context with sport-specific scores
         original_get_context = self.context.get_context
@@ -55,6 +61,7 @@ INSTRUCTIONS:
         async def enriched_context():
             ctx = await original_get_context()
             ctx["live_scores"] = [s["summary"] for s in scores] if scores else []
+            logger.debug("context enriched with sport scores", extra={"sport": subchannel, "score_count": len(ctx["live_scores"])})
             return ctx
 
         self.context.get_context = enriched_context
@@ -66,6 +73,7 @@ INSTRUCTIONS:
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
         """Sports host responds to a caller's hot take."""
+        logger.info("sports callin received", extra={"transcript_len": len(transcript)})
         ctx = await self.context.get_context()
         voice_id = self.get_voice_id("")
 
@@ -87,8 +95,10 @@ Stay under 80 words. Be passionate!"""
             {"role": "user", "content": f"[CALLER HOT TAKE] {transcript}"},
         ]
 
+        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+        t0 = time.monotonic()
         async with self.client.messages.stream(
-            model=self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
+            model=model,
             max_tokens=200,
             system=prompt,
             messages=messages,
@@ -96,6 +106,9 @@ Stay under 80 words. Be passionate!"""
             full = ""
             async for text in stream.text_stream:
                 full += text
+        duration_ms = (time.monotonic() - t0) * 1000
+        log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
+                     model=model, context="sports_callin", response_len=len(full))
 
         if full.strip():
             self.history.append({"role": "user", "content": f"[CALLER] {transcript}"})

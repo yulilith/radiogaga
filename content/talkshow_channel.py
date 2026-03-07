@@ -1,6 +1,10 @@
+import time
 from typing import AsyncGenerator
 
 from content.agent import BaseChannel, ContentChunk, BASE_SYSTEM_PROMPT
+from log import get_logger, log_api_call
+
+logger = get_logger(__name__)
 
 
 # Distinct host personalities per subchannel
@@ -47,6 +51,7 @@ class TalkShowChannel(BaseChannel):
 
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         host = HOST_PERSONALITIES.get(subchannel, HOST_PERSONALITIES["tech"])
+        logger.info("generating talk show segment", extra={"host": host["name"], "show": host["show"], "subchannel": subchannel})
         reddit = context.get("reddit_trending", [])
         reddit_str = "\n".join(f"- {r}" for r in reddit[:5]) if reddit else "No Reddit trends available"
         on_this_day = context.get("on_this_day", [])
@@ -89,6 +94,8 @@ INSTRUCTIONS:
                 host = host_info
                 break
 
+        logger.info("talk show callin received", extra={"host": host["name"], "transcript_preview": transcript[:60]})
+
         prompt = f"""You are {host['name']}, host of "{host['show']}" on RadioAgent.
 Personality: {host['personality']}
 
@@ -108,8 +115,10 @@ Keep to ~80-100 words. Stay in character."""
             {"role": "user", "content": f"[CALLER] {transcript}"},
         ]
 
+        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+        t0 = time.monotonic()
         async with self.client.messages.stream(
-            model=self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
+            model=model,
             max_tokens=200,
             system=prompt,
             messages=messages,
@@ -117,6 +126,9 @@ Keep to ~80-100 words. Stay in character."""
             full = ""
             async for text in stream.text_stream:
                 full += text
+        duration_ms = (time.monotonic() - t0) * 1000
+        log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
+                     model=model, context="talkshow_callin", response_len=len(full))
 
         if full.strip():
             self.history.append({"role": "user", "content": f"[CALLER] {transcript}"})
@@ -125,6 +137,7 @@ Keep to ~80-100 words. Stay in character."""
 
     async def generate_cohost_response(self, statement: str, subchannel: str) -> str:
         """Generate a co-host response for agent-to-agent mode."""
+        logger.info("generating cohost response", extra={"subchannel": subchannel})
         ctx = await self.context.get_context()
         host = HOST_PERSONALITIES.get(subchannel, HOST_PERSONALITIES["tech"])
 
@@ -140,10 +153,15 @@ Respond as a co-host would:
 - Keep the conversation flowing
 - Be concise: 60-80 words max"""
 
+        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+        t0 = time.monotonic()
         response = await self.client.messages.create(
-            model=self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
+            model=model,
             max_tokens=150,
             system=prompt,
             messages=[{"role": "user", "content": statement}],
         )
+        duration_ms = (time.monotonic() - t0) * 1000
+        log_api_call(logger, "anthropic", "messages.create", status="ok", duration_ms=duration_ms,
+                     model=model, context="cohost_response", response_len=len(response.content[0].text))
         return response.content[0].text

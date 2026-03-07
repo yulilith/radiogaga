@@ -2,6 +2,8 @@ import asyncio
 import time
 from datetime import datetime
 
+from log import get_logger
+
 from context.location import get_location
 from context.weather import get_weather
 from context.news import get_headlines
@@ -9,6 +11,8 @@ from context.sports import get_scores
 from context.trends import get_reddit_trending, get_google_trends
 from context.history import get_on_this_day
 from context.astronomy import get_sun_times
+
+logger = get_logger(__name__)
 
 
 class ContextProvider:
@@ -42,6 +46,9 @@ class ContextProvider:
 
     async def get_context(self) -> dict:
         """Return complete context dict for prompt formatting."""
+        fetch_start = time.monotonic()
+        logger.debug("Starting full context fetch")
+
         # Always fresh: time
         now = datetime.now()
         time_context = {
@@ -67,17 +74,44 @@ class ContextProvider:
         )
 
         # Handle exceptions gracefully
-        def safe(val, default):
-            return default if isinstance(val, Exception) else val
+        def safe(val, default, source_name: str = "unknown"):
+            if isinstance(val, Exception):
+                logger.warning(f"Context source '{source_name}' failed: {val}")
+                return default
+            return val
 
-        location = safe(location, {"city": "Unknown", "region": ""})
-        weather = safe(weather, {"current": "unavailable", "forecast": ""})
-        news = safe(news, [])
-        sports = safe(sports, [])
-        reddit = safe(reddit, [])
-        google = safe(google, [])
-        history = safe(history, [])
-        sun = safe(sun, {"sunrise": "", "sunset": ""})
+        location = safe(location, {"city": "Unknown", "region": ""}, "location")
+        weather = safe(weather, {"current": "unavailable", "forecast": ""}, "weather")
+        news = safe(news, [], "news")
+        sports = safe(sports, [], "sports")
+        reddit = safe(reddit, [], "reddit")
+        google = safe(google, [], "google_trends")
+        history = safe(history, [], "history")
+        sun = safe(sun, {"sunrise": "", "sunset": ""}, "astronomy")
+
+        # Log which sources were successfully fetched
+        sources_fetched = []
+        if location.get("city") != "Unknown":
+            sources_fetched.append("location")
+        if weather.get("current") != "unavailable":
+            sources_fetched.append("weather")
+        if news:
+            sources_fetched.append(f"news({len(news)})")
+        if sports:
+            sources_fetched.append(f"sports({len(sports)})")
+        if reddit:
+            sources_fetched.append(f"reddit({len(reddit)})")
+        if google:
+            sources_fetched.append(f"google_trends({len(google)})")
+        if history:
+            sources_fetched.append(f"history({len(history)})")
+        if sun.get("sunrise"):
+            sources_fetched.append("astronomy")
+
+        fetch_duration_ms = (time.monotonic() - fetch_start) * 1000
+        logger.info(f"Context fetch complete in {fetch_duration_ms:.0f}ms: {', '.join(sources_fetched)}",
+                    extra={"duration_ms": f"{fetch_duration_ms:.0f}",
+                           "sources_count": len(sources_fetched)})
 
         return {
             **time_context,
@@ -100,7 +134,9 @@ class ContextProvider:
     async def _cached_fetch(self, key: str, fetcher):
         cached = self._get_cached(key)
         if cached is not None:
+            logger.debug(f"Cache hit for '{key}'")
             return cached
+        logger.debug(f"Cache miss for '{key}', fetching fresh data")
         data = await fetcher()
         self._set_cached(key, data)
         return data

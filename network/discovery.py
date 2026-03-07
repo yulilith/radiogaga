@@ -4,6 +4,9 @@ from typing import Callable
 
 from zeroconf import Zeroconf, ServiceBrowser, ServiceInfo, ServiceStateChange
 
+from log import get_logger
+
+logger = get_logger(__name__)
 
 SERVICE_TYPE = "_radioagent._tcp.local."
 
@@ -44,7 +47,12 @@ class AgentDiscovery:
             properties=properties,
         )
         self.zeroconf.register_service(self._service_info)
-        print(f"[Discovery] Registered as RadioAgent-{self.agent_id} at {ip}:{self.port}")
+        logger.info("Registered as RadioAgent-%s at %s:%d", self.agent_id, ip, self.port)
+        logger.debug("mDNS service registered",
+                      extra={"service_type": SERVICE_TYPE,
+                             "hostname": hostname,
+                             "interests": interests or [],
+                             "channel": channel})
 
     def update_channel(self, channel: str):
         """Update the advertised channel (when user switches)."""
@@ -62,7 +70,7 @@ class AgentDiscovery:
         self._browser = ServiceBrowser(
             self.zeroconf, SERVICE_TYPE, handlers=[self._on_state_change]
         )
-        print("[Discovery] Browsing for nearby RadioAgent peers...")
+        logger.info("Browsing for nearby RadioAgent peers")
 
     def _on_state_change(self, zeroconf: Zeroconf, service_type: str,
                           name: str, state_change: ServiceStateChange):
@@ -83,7 +91,13 @@ class AgentDiscovery:
                         ),
                     }
                     self.peers[peer_id] = peer
-                    print(f"[Discovery] Found peer: {peer_id} at {host}:{info.port}")
+                    logger.info("Found peer: %s at %s:%d", peer_id, host, info.port)
+                    logger.debug("Peer details",
+                                  extra={"peer_id": peer_id,
+                                         "host": host,
+                                         "port": info.port,
+                                         "channel": peer["channel"],
+                                         "interests": peer["interests"]})
                     if self._on_peer_found:
                         self._on_peer_found(peer)
 
@@ -92,7 +106,7 @@ class AgentDiscovery:
             for pid, peer in list(self.peers.items()):
                 if f"RadioAgent-{pid}" in name:
                     del self.peers[pid]
-                    print(f"[Discovery] Lost peer: {pid}")
+                    logger.info("Lost peer: %s", pid)
                     if self._on_peer_lost:
                         self._on_peer_lost(peer)
                     break
@@ -106,4 +120,4 @@ class AgentDiscovery:
         if self._service_info:
             self.zeroconf.unregister_service(self._service_info)
         self.zeroconf.close()
-        print("[Discovery] Shutdown complete")
+        logger.info("Shutdown complete")

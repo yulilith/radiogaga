@@ -1,7 +1,11 @@
 import asyncio
+import time
 from typing import AsyncGenerator
 
 from content.agent import BaseChannel, ContentChunk, BASE_SYSTEM_PROMPT
+from log import get_logger, log_api_call
+
+logger = get_logger(__name__)
 
 
 class DJChannel(BaseChannel):
@@ -67,6 +71,7 @@ INSTRUCTIONS:
 
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         """DJ channel alternates between banter and music."""
+        logger.info("DJ stream_content started", extra={"subchannel": subchannel})
         voice_id = self.get_voice_id(subchannel)
 
         # Build initial set list
@@ -82,9 +87,11 @@ INSTRUCTIONS:
                 {"role": "user", "content": "Generate DJ banter between songs."},
             ]
 
+            model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
             banter = ""
+            t0 = time.monotonic()
             async with self.client.messages.stream(
-                model=self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
+                model=model,
                 max_tokens=100,
                 temperature=0.9,
                 system=system_prompt,
@@ -94,8 +101,12 @@ INSTRUCTIONS:
                     if self._cancelled:
                         return
                     banter += text
+            duration_ms = (time.monotonic() - t0) * 1000
+            log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
+                         model=model, context="dj_banter", response_len=len(banter))
 
             if banter.strip():
+                logger.debug("DJ banter generated", extra={"banter_len": len(banter.strip())})
                 self.history.append({"role": "assistant", "content": banter.strip()})
                 yield ContentChunk(text=banter.strip(), voice_id=voice_id, pause_after=0.5)
 
@@ -106,17 +117,19 @@ INSTRUCTIONS:
             if self.spotify and self._set_list:
                 track = self._set_list.pop(0)
                 self._current_track = track
+                logger.info("playing track", extra={"track": track.get("name", "Unknown"), "artist": track.get("artist", "Unknown")})
                 try:
                     await self.spotify.play_track(track["uri"])
                     # Wait for song to play (check progress periodically)
                     await self._wait_for_song_end()
                     await self.spotify.pause()
                 except Exception as e:
-                    print(f"[DJ] Spotify playback error: {e}")
+                    logger.error("Spotify playback error", exc_info=e, extra={"track": track.get("name", "Unknown")})
                     # Fallback: just pause as if a song played
                     await asyncio.sleep(5)
             elif self.music_manager and self.music_manager.has_music():
                 # Fallback: play a local music clip
+                logger.warning("using local music fallback", extra={"subchannel": subchannel})
                 genre = self._subchannel_to_genre(subchannel)
                 track_path = self.music_manager.get_track(genre)
                 if track_path:
@@ -127,6 +140,7 @@ INSTRUCTIONS:
                     await asyncio.sleep(3)
             else:
                 # No music available — just generate banter
+                logger.warning("no music source available, banter-only mode")
                 self._current_track = None
                 await asyncio.sleep(3)
 
@@ -135,49 +149,58 @@ INSTRUCTIONS:
                 await self._build_set_list(subchannel)
 
     async def _build_set_list(self, subchannel: str):
-        """Build a set list from Spotify based on the subchannel mode."""
+        """Build a set list from Spotify based on the subchannel mode.
+
+        Uses discover_tracks (related artists + search) since
+        the /recommendations endpoint was deprecated by Spotify.
+        """
         if not self.spotify:
             return
 
+        logger.info("building set list", extra={"subchannel": subchannel})
         try:
             if subchannel == "top_tracks":
                 tracks = await self.spotify.get_top_tracks(limit=10)
             elif subchannel == "discover":
-                top = await self.spotify.get_top_tracks(limit=5)
-                seed_ids = [t["id"] for t in top[:3]]
-                tracks = await self.spotify.get_recommendations(
-                    seed_tracks=seed_ids, limit=10
-                )
+                tracks = await self.spotify.discover_tracks(limit=10)
             elif subchannel == "mood":
-                # Time-of-day mood mapping
+                # Time-of-day mood: search for mood-appropriate music
                 ctx = await self.context.get_context()
                 hour = ctx.get("hour", 12)
-                energy = 0.3 if hour >= 21 or hour < 6 else 0.7 if 6 <= hour < 12 else 0.5
-                top = await self.spotify.get_top_tracks(limit=5)
-                seed_ids = [t["id"] for t in top[:3]]
-                tracks = await self.spotify.get_recommendations(
-                    seed_tracks=seed_ids, limit=10,
-                    target_energy=energy,
-                    target_valence=0.5 if hour >= 21 else 0.7,
-                )
+                if hour >= 21 or hour < 6:
+                    mood_query = "chill night relaxing"
+                elif 6 <= hour < 12:
+                    mood_query = "upbeat morning energy"
+                elif 12 <= hour < 17:
+                    mood_query = "afternoon focus"
+                else:
+                    mood_query = "evening vibes sunset"
+                mood_tracks = await self.spotify.search_tracks(mood_query, limit=10)
+                # Mix mood search results with user taste via discover
+                discover = await self.spotify.discover_tracks(limit=5)
+                tracks = mood_tracks[:5] + discover[:5]
             elif subchannel == "genre":
                 genres = await self.spotify.get_top_genres()
                 seed_genres = genres[:2] if genres else ["pop"]
-                tracks = await self.spotify.get_recommendations(
+                tracks = await self.spotify.discover_tracks(
                     seed_genres=seed_genres, limit=10
                 )
             elif subchannel == "decade":
-                top = await self.spotify.get_top_tracks(limit=5)
-                seed_ids = [t["id"] for t in top[:3]]
-                tracks = await self.spotify.get_recommendations(
-                    seed_tracks=seed_ids, limit=10
+                # Search for decade-specific music mixed with user taste
+                import random
+                decade = random.choice(["80s", "90s", "2000s", "2010s"])
+                decade_tracks = await self.spotify.search_tracks(
+                    f"year:{decade} hits classic", limit=10
                 )
+                discover = await self.spotify.discover_tracks(limit=5)
+                tracks = decade_tracks[:5] + discover[:5]
             else:
                 tracks = await self.spotify.get_top_tracks(limit=10)
 
             self._set_list = [self.spotify.format_track_info(t) for t in tracks]
+            logger.info("set list built", extra={"subchannel": subchannel, "track_count": len(self._set_list)})
         except Exception as e:
-            print(f"[DJ] Error building set list: {e}")
+            logger.error("error building set list", exc_info=e, extra={"subchannel": subchannel})
             self._set_list = []
 
     async def _wait_for_song_end(self, check_interval: float = 5.0):

@@ -1,7 +1,10 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from the project root (same directory as this file)
+_env_path = Path(__file__).parent / ".env"
+load_dotenv(_env_path, override=True)
 
 CONFIG = {
     # API Keys
@@ -10,14 +13,14 @@ CONFIG = {
     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
     "SPOTIFY_CLIENT_ID": os.getenv("SPOTIFY_CLIENT_ID"),
     "SPOTIFY_CLIENT_SECRET": os.getenv("SPOTIFY_CLIENT_SECRET"),
-    "SPOTIFY_REDIRECT_URI": os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback"),
+    "SPOTIFY_REDIRECT_URI": os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback"),
     "GNEWS_API_KEY": os.getenv("GNEWS_API_KEY"),
     "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID"),
     "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET"),
     "REDDIT_USER_AGENT": os.getenv("REDDIT_USER_AGENT", "RadioAgent/1.0"),
 
     # LLM Settings
-    "LLM_MODEL": "claude-haiku-4-5-20251001",
+    "LLM_MODEL": "claude-sonnet-4-20250514",
     "LLM_MAX_TOKENS": 300,
     "LLM_TEMPERATURE": 0.85,
 

@@ -4,6 +4,10 @@ import io
 import wave
 import pyaudio
 
+from log import get_logger
+
+logger = get_logger(__name__)
+
 
 class MicController:
     """Records audio from USB microphone for call-in feature."""
@@ -29,21 +33,21 @@ class MicController:
                 name = info.get("name", "").lower()
                 # Prefer USB mic over built-in
                 if "usb" in name or "microphone" in name:
-                    print(f"[Mic] Found mic: {info['name']} (index {i})")
+                    logger.info("Found mic: %s (index %d)", info['name'], i)
                     return i
         # Fallback to default input
         try:
             default = self.pa.get_default_input_device_info()
-            print(f"[Mic] Using default input: {default['name']}")
+            logger.info("Using default input: %s", default['name'])
             return default["index"]
         except IOError:
-            print("[Mic] No input device found!")
+            logger.error("No input device found!")
             return None
 
     def start_recording(self):
         """Start recording from the microphone."""
         if self._input_device is None:
-            print("[Mic] No input device available")
+            logger.error("No input device available")
             return
 
         self._frames = []
@@ -59,7 +63,7 @@ class MicController:
             stream_callback=self._callback,
         )
         self._stream.start_stream()
-        print("[Mic] Recording started")
+        logger.info("Recording started")
 
     def _callback(self, in_data, frame_count, time_info, status):
         if self._recording:
@@ -93,7 +97,7 @@ class MicController:
 
         wav_bytes = buffer.getvalue()
         duration = len(self._frames) * self.CHUNK / self.RATE
-        print(f"[Mic] Recorded {duration:.1f}s ({len(wav_bytes)} bytes)")
+        logger.info("Recorded %.1fs (%d bytes)", duration, len(wav_bytes))
         self._frames = []
         return wav_bytes
 

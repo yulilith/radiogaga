@@ -1,9 +1,14 @@
 import asyncio
 import json
+import sys
 from typing import Callable, Any
 
 import websockets
 from websockets.asyncio.server import serve
+
+from log import get_logger
+
+logger = get_logger(__name__)
 
 
 class PeerServer:
@@ -19,28 +24,49 @@ class PeerServer:
         self.handlers[msg_type] = handler
 
     async def start(self):
-        """Start the WebSocket server."""
-        self._server = await serve(self._handle, "0.0.0.0", self.port)
-        print(f"[PeerServer] Listening on port {self.port}")
+        """Start the WebSocket server. Tries the configured port, falls back if busy."""
+        for attempt_port in (self.port, self.port + 1, self.port + 2):
+            try:
+                self._server = await serve(self._handle, "0.0.0.0", attempt_port)
+                if attempt_port != self.port:
+                    logger.warning("Port %d busy, PeerServer using port %d instead",
+                                   self.port, attempt_port)
+                    self.port = attempt_port
+                logger.info("PeerServer listening on port %d", self.port)
+                return
+            except OSError as e:
+                if e.errno == 48 and attempt_port != self.port + 2:
+                    continue
+                logger.error("PeerServer failed to bind: %s", e)
+                raise
 
     async def _handle(self, websocket):
+        remote = websocket.remote_address
+        logger.info("Connection opened from %s", remote)
         try:
             async for message in websocket:
                 data = json.loads(message)
                 msg_type = data.get("type")
+                msg_size = sys.getsizeof(message)
+                logger.debug("Incoming message",
+                             extra={"type": msg_type, "size_bytes": msg_size,
+                                    "remote": str(remote)})
                 if msg_type in self.handlers:
                     response = await self.handlers[msg_type](data)
                     if response:
                         await websocket.send(json.dumps(response))
                 else:
-                    print(f"[PeerServer] Unknown message type: {msg_type}")
+                    logger.warning("Unknown message type: %s", msg_type)
         except websockets.exceptions.ConnectionClosed:
             pass
+        finally:
+            logger.info("Connection closed from %s", remote)
 
     async def stop(self):
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+            logger.info("PeerServer stopped")
 
 
 class PeerClient:
@@ -52,16 +78,21 @@ class PeerClient:
     async def send(self, host: str, port: int, message: dict) -> dict | None:
         """Send a message to a peer and optionally get a response."""
         uri = f"ws://{host}:{port}"
+        msg_type = message.get("type", "unknown")
+        logger.debug("Outgoing message",
+                     extra={"type": msg_type, "destination": uri})
         try:
             async with websockets.connect(uri, close_timeout=5) as ws:
+                logger.info("Connected to %s", uri)
                 await ws.send(json.dumps(message))
                 try:
                     response = await asyncio.wait_for(ws.recv(), timeout=10)
                     return json.loads(response)
                 except asyncio.TimeoutError:
+                    logger.warning("Response timeout from %s", uri)
                     return None
         except Exception as e:
-            print(f"[PeerClient] Error connecting to {uri}: {e}")
+            logger.error("Error connecting to %s: %s", uri, e)
             return None
 
     async def send_to_peer(self, peer: dict, message: dict) -> dict | None:

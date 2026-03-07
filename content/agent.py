@@ -1,9 +1,14 @@
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 import anthropic
+
+from log import get_logger, log_api_call
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -43,6 +48,7 @@ class BaseChannel(ABC):
 
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         """Generate a continuous stream of content chunks."""
+        logger.info("stream_content started", extra={"channel": self.channel_name(), "subchannel": subchannel})
         while not self._cancelled:
             ctx = await self.context.get_context()
             system_prompt = self.get_system_prompt(subchannel, ctx)
@@ -53,18 +59,27 @@ class BaseChannel(ABC):
                 {"role": "user", "content": "Generate the next segment."},
             ]
 
+            model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+            max_tokens = self.config.get("LLM_MAX_TOKENS", 300)
+            logger.debug(
+                "starting LLM stream",
+                extra={"model": model, "max_tokens": max_tokens, "message_count": len(messages)},
+            )
+
             full_response = ""
             buffer = ""
 
+            t0 = time.monotonic()
             async with self.client.messages.stream(
-                model=self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
-                max_tokens=self.config.get("LLM_MAX_TOKENS", 300),
+                model=model,
+                max_tokens=max_tokens,
                 temperature=self.config.get("LLM_TEMPERATURE", 0.85),
                 system=system_prompt,
                 messages=messages,
             ) as stream:
                 async for text in stream.text_stream:
                     if self._cancelled:
+                        logger.debug("stream cancelled mid-generation")
                         return
                     buffer += text
                     full_response += text
@@ -84,11 +99,17 @@ class BaseChannel(ABC):
                         sentence = buffer[:end].strip()
                         buffer = buffer[end:]
                         if sentence:
+                            logger.debug("yielding content chunk", extra={"text_len": len(sentence), "voice_id": voice_id})
                             yield ContentChunk(text=sentence, voice_id=voice_id)
+
+            duration_ms = (time.monotonic() - t0) * 1000
+            log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
+                         model=model, response_len=len(full_response))
 
             # Yield any remaining text
             remaining = buffer.strip()
             if remaining and not self._cancelled:
+                logger.debug("yielding remaining chunk", extra={"text_len": len(remaining), "voice_id": voice_id})
                 yield ContentChunk(text=remaining, voice_id=voice_id, pause_after=1.0)
 
             # Update conversation history
@@ -96,6 +117,7 @@ class BaseChannel(ABC):
                 self.history.append({"role": "assistant", "content": full_response})
                 if len(self.history) > self.max_history:
                     self.history = self.history[-self.max_history:]
+                logger.info("history updated", extra={"history_size": len(self.history)})
 
             # Brief pause between segments
             if not self._cancelled:
@@ -103,6 +125,7 @@ class BaseChannel(ABC):
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
         """Handle a call-in from a listener. Override in channels that support it."""
+        logger.info("callin received (default handler)", extra={"channel": self.channel_name(), "transcript_len": len(transcript)})
         yield ContentChunk(
             text="Sorry, this channel doesn't take callers right now.",
             voice_id=self.get_voice_id(""),
@@ -110,10 +133,12 @@ class BaseChannel(ABC):
 
     def cancel(self):
         """Cancel ongoing generation (called when switching channels)."""
+        logger.debug("channel cancelled", extra={"channel": self.channel_name()})
         self._cancelled = True
 
     def reset(self):
         """Reset cancellation flag (called when switching back to this channel)."""
+        logger.info("channel reset", extra={"channel": self.channel_name()})
         self._cancelled = False
 
     def clear_history(self):

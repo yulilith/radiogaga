@@ -1,8 +1,13 @@
 import io
 import queue
+import time
 import threading
 import pyaudio
 from pydub import AudioSegment
+
+from log import get_logger
+
+logger = get_logger(__name__)
 
 
 class AudioPlayer:
@@ -27,6 +32,7 @@ class AudioPlayer:
         self._play_thread: threading.Thread | None = None
         self._volume = 0.7  # 0.0 to 1.0
         self._muted = False
+        self._last_underrun_log: float = 0.0  # rate-limit underrun warnings
 
     @property
     def volume(self) -> float:
@@ -34,7 +40,11 @@ class AudioPlayer:
 
     @volume.setter
     def volume(self, value: float):
+        old = self._volume
         self._volume = max(0.0, min(1.0, value))
+        logger.info("Volume changed", extra={
+            "old_volume": f"{old:.2f}", "new_volume": f"{self._volume:.2f}",
+        })
 
     @property
     def muted(self) -> bool:
@@ -42,9 +52,11 @@ class AudioPlayer:
 
     def toggle_mute(self):
         self._muted = not self._muted
+        logger.info("Mute toggled", extra={"muted": self._muted})
 
     def start(self):
         """Start the playback thread."""
+        logger.info("Audio player starting")
         self._playing = True
         self._play_thread = threading.Thread(target=self._playback_loop, daemon=True)
         self._play_thread.start()
@@ -62,7 +74,11 @@ class AudioPlayer:
                     adjusted = self._apply_volume(audio_data)
                     self.stream.write(adjusted)
             except queue.Empty:
-                # Buffer underrun -- play silence
+                # Buffer underrun -- play silence, log at most once per 5 seconds
+                now = time.monotonic()
+                if now - self._last_underrun_log >= 5.0:
+                    logger.warning("Buffer underrun, playing silence")
+                    self._last_underrun_log = now
                 silence = b"\x00" * self.CHUNK_SIZE * 2
                 self.stream.write(silence)
 
@@ -80,19 +96,35 @@ class AudioPlayer:
 
     def enqueue_mp3(self, mp3_bytes: bytes):
         """Convert MP3 bytes to PCM and add to playback queue."""
-        audio = AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
+        if not mp3_bytes or len(mp3_bytes) < 4:
+            logger.error("Received empty or too-small MP3 data, skipping")
+            return
+        try:
+            audio = AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
+        except Exception as e:
+            logger.error("Failed to decode MP3 (%d bytes): %s", len(mp3_bytes), e)
+            return
         audio = audio.set_frame_rate(self.SAMPLE_RATE).set_channels(self.CHANNELS)
         raw_data = audio.raw_data
 
+        chunk_count = 0
         for i in range(0, len(raw_data), self.CHUNK_SIZE * 2):
             chunk = raw_data[i:i + self.CHUNK_SIZE * 2]
             try:
                 self.audio_queue.put(chunk, timeout=5.0)
+                chunk_count += 1
             except queue.Full:
+                logger.warning("Audio queue full, dropping remaining chunks",
+                               extra={"enqueued": chunk_count})
                 break
+
+        logger.debug("MP3 enqueued", extra={
+            "input_bytes": len(mp3_bytes), "chunks": chunk_count,
+        })
 
     def play_file(self, filepath: str):
         """Play an audio file (wav, mp3, etc.) from disk."""
+        logger.debug("Playing file from disk", extra={"filepath": filepath})
         audio = AudioSegment.from_file(filepath)
         audio = audio.set_frame_rate(self.SAMPLE_RATE).set_channels(self.CHANNELS)
         raw_data = audio.raw_data
@@ -105,11 +137,14 @@ class AudioPlayer:
 
     def clear_buffer(self):
         """Flush the audio queue (for channel switching)."""
+        discarded = 0
         while not self.audio_queue.empty():
             try:
                 self.audio_queue.get_nowait()
+                discarded += 1
             except queue.Empty:
                 break
+        logger.debug("Buffer cleared", extra={"chunks_discarded": discarded})
 
     def buffer_level(self) -> int:
         """Return current number of chunks in buffer."""
@@ -117,6 +152,7 @@ class AudioPlayer:
 
     def stop(self):
         """Stop playback and clean up."""
+        logger.info("Audio player stopping")
         self._playing = False
         if self._play_thread:
             self._play_thread.join(timeout=2.0)

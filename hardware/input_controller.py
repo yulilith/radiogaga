@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from typing import Callable
 
 from content.channels import CHANNELS, resolve_subchannel
+from log import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -48,8 +51,9 @@ class InputController:
             self.GPIO = GPIO
             self._use_gpio = True
             self._setup_gpio()
+            logger.info("GPIO hardware initialized successfully")
         except (ImportError, RuntimeError):
-            print("[Input] RPi.GPIO not available, using keyboard simulator")
+            logger.info("RPi.GPIO not available, using keyboard simulator")
             self._use_gpio = False
 
     def _setup_gpio(self):
@@ -102,6 +106,10 @@ class InputController:
             else:
                 self.dial_position = max(0, self.dial_position - 2)
             subchannel = resolve_subchannel(self.active_channel, self.dial_position)
+            logger.debug("Dial change",
+                         extra={"channel": self.active_channel,
+                                "position": self.dial_position,
+                                "subchannel": subchannel})
             self.callback(InputEvent(
                 event_type="dial_change",
                 channel=self.active_channel,
@@ -111,6 +119,7 @@ class InputController:
         self._last_tuning_clk = clk
 
     def _tuning_click_callback(self, channel):
+        logger.debug("Dial click")
         self.callback(InputEvent(event_type="dial_click"))
 
     def _volume_callback(self, channel):
@@ -122,15 +131,18 @@ class InputController:
                 self.volume = min(100, self.volume + 3)
             else:
                 self.volume = max(0, self.volume - 3)
+            logger.debug("Volume change", extra={"volume": self.volume})
             self.callback(InputEvent(event_type="volume_change", volume=self.volume))
         self._last_volume_clk = clk
 
     def _volume_mute_callback(self, channel):
+        logger.debug("Volume mute toggled")
         self.callback(InputEvent(event_type="volume_mute"))
 
     def _button_callback(self, channel):
         channel_id = self.BUTTON_MAP.get(channel)
         if channel_id:
+            logger.debug("Button press", extra={"channel": channel_id, "gpio_pin": channel})
             self.active_channel = channel_id
             self.callback(InputEvent(
                 event_type="button_press",
@@ -142,21 +154,17 @@ class InputController:
         pressed = not self.GPIO.input(pin)  # Active low
         if pressed and not self._callin_active:
             self._callin_active = True
+            logger.debug("Call-in button pressed")
             self.callback(InputEvent(event_type="callin_start"))
         elif not pressed and self._callin_active:
             self._callin_active = False
+            logger.debug("Call-in button released")
             self.callback(InputEvent(event_type="callin_stop"))
 
     async def run_keyboard_simulator(self):
         """Keyboard-based input simulator for development without hardware."""
-        print("\n--- RadioAgent Keyboard Controls ---")
-        print("1-4: Switch channels (News, Talk, Sports, DJ)")
-        print("← →: Tune dial (left/right arrow or a/d)")
-        print("↑ ↓: Volume (up/down arrow or w/s)")
-        print("c:   Call-in (press to start, press again to stop)")
-        print("m:   Mute/unmute")
-        print("q:   Quit")
-        print("------------------------------------\n")
+        logger.info("Keyboard simulator started")
+        logger.info("Controls: 1-4=channels, a/d=tune, w/s=volume, c=call-in, m=mute, q=quit")
 
         loop = asyncio.get_event_loop()
         channel_keys = {"1": "news", "2": "talkshow", "3": "sports", "4": "dj"}
@@ -192,7 +200,7 @@ class InputController:
                 if not self._callin_active:
                     self._callin_active = True
                     self.callback(InputEvent(event_type="callin_start"))
-                    print("[Input] Recording... press 'c' again to stop")
+                    logger.info("Recording... press 'c' again to stop")
                 else:
                     self._callin_active = False
                     self.callback(InputEvent(event_type="callin_stop"))
@@ -210,6 +218,8 @@ class InputController:
             try:
                 tty.setraw(fd)
                 ch = sys.stdin.read(1)
+                if ch == "\x03":  # Ctrl+C
+                    return "q"
                 if ch == "\x1b":
                     ch2 = sys.stdin.read(2)
                     if ch2 == "[A": return "up"

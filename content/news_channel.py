@@ -1,6 +1,10 @@
+import time
 from typing import AsyncGenerator
 
 from content.agent import BaseChannel, ContentChunk, BASE_SYSTEM_PROMPT
+from log import get_logger, log_api_call
+
+logger = get_logger(__name__)
 
 
 class NewsChannel(BaseChannel):
@@ -15,6 +19,7 @@ class NewsChannel(BaseChannel):
         return self.config["VOICES"].get("news_anchor", "pNInz6obpgDQGcFmaJgB")
 
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
+        logger.info("generating news segment", extra={"subchannel": subchannel})
         headlines = context.get("headlines", [])
         headlines_str = "\n".join(f"- {h}" for h in headlines) if headlines else "No headlines available"
 
@@ -66,6 +71,8 @@ INSTRUCTIONS:
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
         """News anchor responds to a caller's question."""
+        logger.info("news callin received", extra={"transcript_len": len(transcript)})
+        logger.debug("callin transcript preview", extra={"preview": transcript[:80]})
         ctx = await self.context.get_context()
         voice_id = self.get_voice_id("")
 
@@ -82,8 +89,10 @@ Keep response under 80 words.
             {"role": "user", "content": f"A caller says: {transcript}"},
         ]
 
+        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+        t0 = time.monotonic()
         async with self.client.messages.stream(
-            model=self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
+            model=model,
             max_tokens=200,
             system=prompt,
             messages=messages,
@@ -91,5 +100,8 @@ Keep response under 80 words.
             full = ""
             async for text in stream.text_stream:
                 full += text
-            if full.strip():
-                yield ContentChunk(text=full.strip(), voice_id=voice_id, pause_after=1.0)
+        duration_ms = (time.monotonic() - t0) * 1000
+        log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
+                     model=model, context="news_callin", response_len=len(full))
+        if full.strip():
+            yield ContentChunk(text=full.strip(), voice_id=voice_id, pause_after=1.0)

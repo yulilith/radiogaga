@@ -1,5 +1,9 @@
 """Channel registry and subchannel definitions."""
 
+from log import get_logger
+
+logger = get_logger(__name__)
+
 CHANNELS = {
     "news": {
         "name": "News & Weather",
@@ -59,8 +63,11 @@ def resolve_subchannel(channel_id: str, dial_position: int) -> str:
         return ""
     for sub in channel["subchannels"]:
         if sub["dial_min"] <= dial_position <= sub["dial_max"]:
+            logger.debug("subchannel resolved", extra={"channel": channel_id, "dial_position": dial_position, "subchannel": sub["id"]})
             return sub["id"]
-    return channel["subchannels"][0]["id"]
+    default = channel["subchannels"][0]["id"]
+    logger.debug("subchannel defaulted", extra={"channel": channel_id, "dial_position": dial_position, "subchannel": default})
+    return default
 
 
 def get_subchannel_name(channel_id: str, subchannel_id: str) -> str:
