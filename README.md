@@ -186,12 +186,59 @@ Key environment variables:
 
 ## Running The Hardware-First Prototype
 
-From the repo root:
+### Prerequisites
+
+Install system-level dependencies first:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+# macOS
+brew install ffmpeg portaudio
+
+# Debian / Ubuntu
+sudo apt-get install ffmpeg portaudio19-dev
+```
+
+Requires **Python 3.11+**. If you are on Python 3.13 or later, `audioop-lts` is included in `requirements.txt` to replace the removed stdlib `audioop` module that `pydub` depends on.
+
+### Setup
+
+```bash
+cd radiogaga
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+```
+
+### Environment Variables
+
+Copy the example and fill in your keys:
+
+```bash
+cp .env.example .env
+```
+
+Required variables:
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude API key for LLM generation |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key for TTS |
+| `SPOTIFY_CLIENT_ID` | Spotify app client ID |
+| `SPOTIFY_CLIENT_SECRET` | Spotify app client secret |
+| `SPOTIFY_REDIRECT_URI` | Spotify OAuth redirect (default `http://127.0.0.1:8888/callback`) |
+
+Optional variables:
+
+| Variable | Description |
+|---|---|
+| `GNEWS_API_KEY` | GNews.io key for news context |
+| `RADIO_ANTHROPIC_MODEL` | Claude model to use (default `claude-haiku-4-5-20251001`) |
+| `RADIO_ELEVENLABS_MODEL` | ElevenLabs model (default `eleven_flash_v2_5`) |
+| `RADIO_ELEVENLABS_SPEED` | TTS playback speed (default `1.2`) |
+
+### Run
+
+```bash
 python main.py
 ```
 
