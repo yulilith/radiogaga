@@ -233,7 +233,7 @@ class InputController:
             fd = sys.stdin.fileno()
             old = termios.tcgetattr(fd)
             try:
-                tty.setraw(fd)
+                tty.setcbreak(fd)
                 ch = sys.stdin.read(1)
                 if ch == "\x03":
                     return "q"

@@ -28,3 +28,4 @@ pytrends>=4.9.0            # Google Trends (unofficial)
 
 # Utilities
 python-dotenv>=1.0.0
+audioop-lts>=0.2.2          # audioop backport for Python 3.13+

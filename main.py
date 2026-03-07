@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """RadioAgent — AI-powered radio with LLM agents, physical controls, and agent-to-agent interaction."""
 
+import argparse
 import asyncio
 import signal
 import uuid
@@ -40,7 +41,7 @@ logger = get_logger("main")
 class RadioAgent:
     """Main controller — wires together hardware, audio, content, and networking."""
 
-    def __init__(self):
+    def __init__(self, channel: str = "news"):
         self.agent_id = str(uuid.uuid4())[:8]
         self._loop: asyncio.AbstractEventLoop | None = None
         self._generation_task: asyncio.Task | None = None
@@ -66,8 +67,11 @@ class RadioAgent:
                     client_id=CONFIG["SPOTIFY_CLIENT_ID"],
                     client_secret=CONFIG["SPOTIFY_CLIENT_SECRET"],
                     redirect_uri=CONFIG.get("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback"),
+                    playback_mode=CONFIG.get("SPOTIFY_PLAYBACK_MODE", "pi"),
                 )
-                logger.info("Spotify connected")
+                logger.info("Spotify connected", extra={
+                    "playback_mode": CONFIG.get("SPOTIFY_PLAYBACK_MODE", "pi"),
+                })
             except Exception as e:
                 logger.error("Spotify init failed: %s", e)
 
@@ -88,8 +92,8 @@ class RadioAgent:
         }
 
         # State
-        self.active_channel = "dailybrief"
-        self.active_subchannel = "local"
+        self.active_channel = channel
+        self.active_subchannel = resolve_subchannel(channel, 0)
 
         # Networking (agent-to-agent)
         self.discovery = AgentDiscovery(self.agent_id, CONFIG.get("AGENT_PORT", 8765))
@@ -145,7 +149,13 @@ class RadioAgent:
     def _on_input_event(self, event: InputEvent):
         """Handle hardware input events (may be called from GPIO thread)."""
         if self._loop:
-            asyncio.run_coroutine_threadsafe(self._handle_event(event), self._loop)
+            asyncio.run_coroutine_threadsafe(self._safe_handle_event(event), self._loop)
+
+    async def _safe_handle_event(self, event: InputEvent):
+        try:
+            await self._handle_event(event)
+        except Exception as e:
+            logger.error("Unhandled exception in event handler: %s", e, exc_info=True)
 
     async def _handle_event(self, event: InputEvent):
         """Process an input event."""
@@ -202,7 +212,10 @@ class RadioAgent:
         self.active_channel = channel
         self.active_subchannel = resolve_subchannel(channel, self.input.dial_position)
         self.leds.activate(channel)
-        self.discovery.update_channel(channel)
+        try:
+            self.discovery.update_channel(channel)
+        except Exception as e:
+            logger.warning("Discovery update failed (non-fatal): %s", e)
 
         # Update display
         self.display.update(
@@ -433,11 +446,22 @@ class RadioAgent:
         logger.info("RadioAgent signing off. Goodbye!")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="RadioAgent — AI-powered radio")
+    parser.add_argument(
+        "-c", "--channel",
+        choices=list(CHANNELS.keys()),
+        default="news",
+        help="channel to start on (default: news)",
+    )
+    return parser.parse_args()
+
+
 def main():
     """Entry point."""
+    args = parse_args()
     setup_logging()
 
-    # Check for required API keys
     missing = []
     if not CONFIG.get("ANTHROPIC_API_KEY"):
         missing.append("ANTHROPIC_API_KEY")
@@ -449,7 +473,7 @@ def main():
         logger.error("Copy .env.example to .env and fill in your keys.")
         sys.exit(1)
 
-    agent = RadioAgent()
+    agent = RadioAgent(channel=args.channel)
     asyncio.run(agent.run())
 
 
