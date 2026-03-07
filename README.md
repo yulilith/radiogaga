@@ -1,190 +1,145 @@
-# RadioGaga
+# RadioAgent
 
-RadioGaga is a local-first AI radio project with two complementary tracks in the same repo:
+RadioAgent is a local-first AI radio built on a Raspberry Pi 5. It combines physical controls, AI-generated content channels, live context, peer networking, and voice call-ins into a device that feels like a real radio — not a chatbot.
 
-- a hardware-first radio prototype at the repo root that mixes physical controls, channel switching, live context, peer radios, and voice call-ins
-- a cleaner packaged runtime in `radio-agent/` focused on a real-time two-host debate show with local orchestration, configurable personas, caller interruption, and swappable TTS
+The repo has two complementary tracks:
 
-The short version: this repo explores what an AI-native radio can feel like when it behaves more like a live show than a chatbot.
+- A hardware-first radio prototype at the repo root with physical controls, channel switching, live context, peer radios, and voice call-ins
+- A cleaner packaged runtime in `radio-agent/` focused on a real-time two-host debate show with local orchestration, configurable personas, caller interruption, and swappable TTS
+
+## Hardware
+
+**Platform:** Raspberry Pi 5 (Linux, Python, GPIO, audio out, WiFi built-in)
+
+### Components (~$90-130 total)
+
+| Component | Purpose |
+|-----------|---------|
+| Raspberry Pi 5 + SD card + USB-C power | Main compute |
+| 6x tactile push buttons | 4 channel buttons + call-in + NFC system |
+| 6x LEDs with 220-ohm resistors | 4 channel indicators + 2 slider indicators |
+| 2x HW-233 slide potentiometers | Tuning dial + volume dial |
+| MCP3008 ADC | Analog-to-digital for slide pots (SPI) |
+| INMP441 I2S microphone | Call-in voice input |
+| 3W 8ohm speaker (JST PH2.0) + USB audio adapter | Audio output |
+| Waveshare 2.13" e-ink display HAT | Station info display |
+| PN532 NFC/RFID reader (I2C) | Read NFC tags for content injection |
+| Breadboard + jumper wires | Prototyping |
+| 3D-printed enclosure | Housing |
+
+### GPIO Pinout (BCM mode, Raspberry Pi 5)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  BUTTONS (6x, active-low, internal pull-up)             │
+│    GPIO  5  (pin 29)  Channel 1 — Daily Brief           │
+│    GPIO  6  (pin 31)  Channel 2 — Talk Show             │
+│    GPIO 13  (pin 33)  Channel 3 — Music                 │
+│    GPIO 26  (pin 37)  Channel 4 — Memos                 │
+│    GPIO 16  (pin 36)  Call-in (press-and-hold to talk)   │
+│    GPIO  4  (pin  7)  System / NFC (process tag)         │
+│                                                         │
+│  LEDs (6x, active-high, 220 ohm resistor to GND)        │
+│    GPIO 12  (pin 32)  Channel 1 LED — Daily Brief       │
+│    GPIO 22  (pin 15)  Channel 2 LED — Talk Show         │
+│    GPIO 23  (pin 16)  Channel 3 LED — Music             │
+│    GPIO 27  (pin 13)  Channel 4 LED — Memos             │
+│    GPIO 14  (pin  8)  Tuning slider LED                 │
+│    GPIO 15  (pin 10)  Volume slider LED                 │
+│                                                         │
+│  SPI0 — shared by e-ink display (CE0) + MCP3008 (CE1)   │
+│    GPIO 10  (pin 19)  MOSI                              │
+│    GPIO  9  (pin 21)  MISO                              │
+│    GPIO 11  (pin 23)  SCLK                              │
+│    GPIO  8  (pin 24)  CE0 → e-ink CS                    │
+│    GPIO  7  (pin 26)  CE1 → MCP3008 CS                  │
+│                                                         │
+│  E-ink display control                                  │
+│    GPIO 25  (pin 22)  DC                                │
+│    GPIO 17  (pin 11)  RST                               │
+│    GPIO 24  (pin 18)  BUSY                              │
+│                                                         │
+│  I2S — INMP441 microphone                               │
+│    GPIO 18  (pin 12)  BCK  (bit clock)                  │
+│    GPIO 19  (pin 35)  WS   (word select / LRCK)         │
+│    GPIO 20  (pin 38)  DIN  (data in from mic)           │
+│    GPIO 21  (pin 40)  DOUT (reserved: future I2S amp)   │
+│                                                         │
+│  I2C1 — PN532 NFC reader                               │
+│    GPIO  2  (pin  3)  SDA                               │
+│    GPIO  3  (pin  5)  SCL                               │
+│                                                         │
+│  Power                                                  │
+│    3.3V (pin 1, 17)   VCC for INMP441, PN532            │
+│    5V   (pin 2, 4)    VCC for MCP3008, e-ink HAT        │
+│    GND  (pins 6,9,14,20,25,30,34,39)                   │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Content Channels
+
+| Button | Channel | Tuning Dial (subchannels) |
+|--------|---------|--------------------------|
+| 1 | Daily Brief (News & Weather) | Local → National → World → Weather → Traffic |
+| 2 | Talk Show | Tech Talk → Pop Culture → Philosophy → Comedy → Advice |
+| 3 | Music | My Top Tracks → Discover → Genre Radio → Mood/Vibe → Decade |
+| 4 | Memos | (no subchannels — voice memo record/playback) |
+
+### Controls
+
+**4 channel buttons:** Press to switch between content channels. Active channel LED lights up.
+
+**Tuning dial (slide pot):** Position maps 0-100 across subchannels within the active channel. Sliding between stations plays brief static SFX for analog radio feel.
+
+**Volume dial (slide pot):** Controls speaker volume 0-100.
+
+**Call-in button:** Press-and-hold to speak into the INMP441 mic. Audio is transcribed via Whisper, then the current channel's host responds to the caller as part of the show. LED glows while mic is active. Works on Talk Show channel.
+
+**NFC/System button:** Press to read an NFC tag via the PN532 reader. Tag content (NDEF text) is saved to the Memos channel and announced via TTS.
+
+**E-ink display:** Shows current channel name, subchannel, time, and volume level. Updates on channel/subchannel changes.
 
 ## Repo Layout
 
-### `radio-agent/`
+### Repo Root — Hardware Prototype
 
-This is the most modular and easiest-to-run version of the project.
+- `main.py`: top-level controller wiring hardware, channels, audio, context, networking
+- `config.py`: environment-driven config with full GPIO pinout
+- `content/`: channel implementations — daily brief, talk show, music, memos
+- `context/`: live context collection (weather, news, sports, trends, history)
+- `hardware/`: GPIO buttons, LED control, I2S mic, NFC reader, e-ink display, ADC polling
+- `audio/`: TTS (ElevenLabs), STT (Whisper), playback, Spotify, music manager
+- `network/`: peer discovery (mDNS) and radio-to-radio communication (WebSocket)
 
-- `radio-agent/scripts/run_local_debate.py`: launches the local debate stack, starts the WebSocket hub, spawns the two host runtimes, and optionally accepts live text injection
-- `radio-agent/radioagent/transport/ws_hub.py`: central localhost WebSocket hub that owns session routing, caller injection, and turn dispatch
-- `radio-agent/radioagent/debate/orchestrator.py`: in-memory debate state machine and turn scheduling
-- `radio-agent/radioagent/agents/runtime.py`: per-host runtime that generates a turn, synthesizes audio, plays it locally, and sends the result back to the hub
-- `radio-agent/radioagent/prompts/`: YAML persona files for the hosts, including voice IDs and system prompts
-- `radio-agent/radioagent/voice/`: TTS provider boundary, currently ElevenLabs-first with a mock provider for testing
-- `radio-agent/radioagent/audio/player.py`: local playback with interruption support
-- `radio-agent/radioagent/observability/`: structured session logs and event recording
+### `radio-agent/` — Packaged Debate Runtime
 
-### Repo Root Prototype
-
-The repo root is the broader "AI radio device" prototype.
-
-- `main.py`: top-level controller that wires together hardware input, channel logic, audio, context, and peer networking
-- `content/`: channel-specific behavior like talk, news, sports, and DJ flows
-- `context/`: live context collection and caching
-- `hardware/`: GPIO and physical input abstractions
-- `audio/`: TTS, STT, playback, Spotify, and music management
-- `network/`: peer discovery and radio-to-radio communication
-- `config.py`: environment-driven config for the prototype stack
-
-## What The Radio Agent Does
-
-In the packaged `radio-agent/` runtime, two AI hosts run as separate local processes and take turns discussing a topic. A local WebSocket hub coordinates the show, tracks history, and accepts caller input. Each host has its own editable YAML persona and voice, generates a short stance-heavy response, runs TTS, and plays the result locally.
-
-The caller path is intentionally simple right now: the user injects plain text into the show, and the active host can be interrupted so the show pivots quickly to the caller instead of waiting for the current monologue to finish.
+- `radio-agent/scripts/run_local_debate.py`: launches the local debate stack
+- `radio-agent/radioagent/transport/ws_hub.py`: central WebSocket hub
+- `radio-agent/radioagent/debate/orchestrator.py`: debate state machine
+- `radio-agent/radioagent/agents/runtime.py`: per-host agent runtime
+- `radio-agent/radioagent/prompts/`: YAML persona files (voice IDs + system prompts)
+- `radio-agent/radioagent/voice/`: TTS provider boundary (ElevenLabs + mock)
+- `radio-agent/radioagent/audio/player.py`: local playback with interruption
+- `radio-agent/radioagent/observability/`: structured session logs
 
 ## Design Decisions
 
-### 1. Keep everything local first
+1. **Local-first WebSocket hub** — All coordination on localhost for easy debugging
+2. **Separate host runtimes** — Each agent in its own process for isolation
+3. **Editable YAML personas** — Prompts outside code for fast iteration
+4. **Short, stance-heavy turns** — Audio-friendly, conversational rhythm
+5. **Swappable TTS boundary** — ElevenLabs primary, OpenAI fallback
+6. **Raw Anthropic SDK** — More reliable than Agent SDK for this project
+7. **Explicit preflight checks** — Validate APIs before show starts
+8. **Audio interruption** — Caller input cuts live playback immediately
+9. **Structured session logs** — Machine-readable event recording
+10. **MCP3008 ADC for analog pots** — Pi has no analog GPIO; SPI ADC reads HW-233 sliders
+11. **I2S microphone (INMP441)** — Direct digital audio, no USB adapter needed for mic
+12. **SPI bus sharing** — E-ink display on CE0, ADC on CE1, same SPI0 bus
+13. **NFC via I2C** — PN532 on I2C1 for tag reading, separate from SPI devices
+14. **E-ink for status** — Low-power persistent display, partial refresh for quick updates
 
-The current debate stack runs entirely on localhost with a central WebSocket hub. That makes it easy to debug, test, and run repeatedly without introducing extra infrastructure.
-
-Why:
-
-- easier to reason about than a distributed first version
-- simpler for hackathon iteration
-- keeps state transitions visible and observable
-
-### 2. Separate host runtimes from the hub
-
-Each host runs in its own process and talks to the hub over typed socket messages.
-
-Why:
-
-- closer to how independent radio personalities should behave
-- failures stay more isolated
-- easier to swap prompts, voices, and backends per host later
-
-### 3. Make personas editable outside the code
-
-Host personas live in YAML prompt files under `radio-agent/radioagent/prompts/`.
-
-Why:
-
-- fast testing between runs
-- easy to tune voice IDs and host style without touching orchestration code
-- supports sharper host differentiation
-
-### 4. Prefer short turns and strong opinions
-
-We deliberately pushed the hosts away from neutral assistant behavior. The current prompts bias them toward short, punchy, stance-heavy turns and radio-friendly handoffs.
-
-Why:
-
-- long neutral answers do not sound like live radio
-- more turns feels more conversational
-- stronger priors create a more entertaining debate dynamic
-
-### 5. Swappable TTS boundary, ElevenLabs first
-
-The debate runtime uses a small provider boundary in `radio-agent/radioagent/voice/` so TTS can be swapped without rewriting the rest of the system.
-
-Why:
-
-- ElevenLabs is a strong default for fast voice prototyping
-- mock TTS keeps tests and local validation cheap
-- future providers can slot in at the boundary
-
-### 6. Default to raw Anthropic API for generation
-
-The debate runtime keeps support for the Claude Agent SDK, but the default backend is the raw Anthropic Python SDK.
-
-Why:
-
-- it proved more reliable in live runs for this project
-- the direct messages API is simpler to validate and debug
-- keeping the Agent SDK optional preserves flexibility without making it the critical path
-
-### 7. Use explicit preflight checks
-
-Startup validates the configured LLM and TTS providers before the show begins.
-
-Why:
-
-- API failures are easier to understand up front than mid-session
-- reduces "silent failure" during live iteration
-- shortens feedback loops when keys or models are wrong
-
-### 8. Interrupt audio, not just text flow
-
-Caller injection now interrupts the active host instead of merely queuing the next response after playback ends.
-
-Why:
-
-- live radio needs actual interruption behavior
-- cutting the local playback process creates a much more believable show rhythm
-- rerouting the next turn immediately makes caller input feel first-class
-
-### 9. Keep logs structured and session-oriented
-
-The packaged runtime records structured session events under `.radioagent/logs/`.
-
-Why:
-
-- replaying and debugging session flow matters more than pretty console output
-- machine-readable logs help both humans and coding agents inspect behavior quickly
-
-### 10. Keep the repo split between product direction and focused runtime
-
-The repo root still contains the bigger radio-device vision, while `radio-agent/` is the tighter runtime that is easiest to run and evolve quickly.
-
-Why:
-
-- the prototype proves the broader system ambition
-- the packaged runtime keeps the most useful core loop isolated
-- both layers are valuable, but they solve different iteration problems
-
-## Current Debate Host Direction
-
-The current debate runtime is intentionally character-driven:
-
-- `Alex` is a louder, Southern, plain-spoken American radio host
-- `Blair` is a more controlled but still highly opinionated co-host
-
-Both are configured to:
-
-- keep responses short
-- avoid neutral hedging
-- react directly to callers and each other
-- keep the show moving through frequent turns
-
-## Running The Packaged Debate Runtime
-
-From `radio-agent/`:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-python scripts/run_local_debate.py
-```
-
-Useful variants:
-
-```bash
-python scripts/run_local_debate.py --topic "Is Northwestern the best engineering school?"
-python scripts/run_local_debate.py --max-turns 4 --no-cli
-python -m radioagent.interface.cli_injector --uri ws://127.0.0.1:8765 --text "Caller says you're both wrong."
-```
-
-Key environment variables:
-
-- `ANTHROPIC_API_KEY`
-- `ELEVENLABS_API_KEY`
-- `RADIO_AGENT_BACKEND`
-- `RADIO_ANTHROPIC_MODEL`
-- `RADIO_ELEVENLABS_MODEL`
-- `RADIO_ELEVENLABS_SPEED`
-- `RADIO_DEBATE_TOPIC`
-
-## Running The Hardware-First Prototype
+## Running The Hardware Prototype
 
 From the repo root:
 
@@ -195,8 +150,33 @@ pip install -r requirements.txt
 python main.py
 ```
 
-This version is broader than the packaged runtime and is aimed at the full radio-device experience: channels, context, audio, physical inputs, peer radios, and voice call-ins.
+On Raspberry Pi 5, also enable I2S and SPI overlays in `/boot/firmware/config.txt`:
 
-## Why This Repo Exists
+```
+dtparam=i2s=on
+dtparam=spi=on
+dtoverlay=i2s-mmap
+```
 
-The core bet behind RadioGaga is that "AI radio" should feel alive: strong hosts, fast turn-taking, real caller interruption, configurable voices, and a system architecture that is simple enough to keep changing quickly.
+Then uncomment the Pi-specific dependencies in `requirements.txt` and install them.
+
+Without Pi hardware, the keyboard simulator activates automatically:
+- `1-4` = channel buttons
+- `a/d` = tune left/right
+- `w/s` = volume up/down
+- `c` = toggle call-in recording
+- `n` = simulate NFC button press
+- `q` = quit
+
+## Running The Debate Runtime
+
+From `radio-agent/`:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+python scripts/run_local_debate.py
+```
+
+Key environment variables: `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `RADIO_AGENT_BACKEND`, `RADIO_ANTHROPIC_MODEL`, `RADIO_ELEVENLABS_MODEL`.

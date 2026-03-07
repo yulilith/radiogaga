@@ -3,12 +3,19 @@ anthropic>=0.40.0          # Claude API (LLM)
 elevenlabs>=1.0.0          # TTS
 openai>=1.12.0             # Whisper STT API
 spotipy>=2.16.0            # Spotify Web API
-PyAudio>=0.2.14            # Audio I/O
 pydub>=0.25.1              # Audio format conversion
 
-# Hardware (only on Raspberry Pi)
-# RPi.GPIO>=0.7.1          # GPIO control
-# gpiozero>=2.0            # Higher-level GPIO
+# Audio I/O — at least one required
+PyAudio>=0.2.14            # USB mic fallback + audio playback
+sounddevice>=0.4.6         # I2S mic (INMP441) via ALSA
+
+# Hardware (Raspberry Pi 5 only — uncomment on Pi)
+# RPi.GPIO>=0.7.1          # GPIO buttons & LEDs
+# spidev>=3.6              # SPI bus — MCP3008 ADC (slide pots) & e-ink display
+# adafruit-circuitpython-pn532>=2.3.0  # NFC reader (PN532 via I2C)
+# adafruit-blinka>=8.0.0   # CircuitPython compatibility layer for Pi
+# waveshare-epd            # Waveshare 2.13" e-ink display driver
+# Pillow>=10.0.0           # Image rendering for e-ink
 
 # Networking
 aiohttp>=3.9.0             # Async HTTP

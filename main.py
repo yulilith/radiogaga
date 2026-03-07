@@ -15,16 +15,18 @@ from config import CONFIG
 from hardware.input_controller import InputController, InputEvent
 from hardware.led_controller import LEDController
 from hardware.mic_controller import MicController
+from hardware.nfc_controller import NFCController
+from hardware.display_controller import DisplayController
 from audio.tts_service import TTSService
 from audio.stt_service import STTService
 from audio.audio_player import AudioPlayer
 from audio.spotify_service import SpotifyService
 from audio.music_manager import MusicManager
 from content.channels import CHANNELS, resolve_subchannel, get_subchannel_name
-from content.news_channel import NewsChannel
+from content.daily_brief_channel import DailyBriefChannel
 from content.talkshow_channel import TalkShowChannel
-from content.sports_channel import SportsChannel
-from content.dj_channel import DJChannel
+from content.music_channel import MusicChannel
+from content.memos_channel import MemosChannel
 from context.context_provider import ContextProvider
 from network.discovery import AgentDiscovery
 from network.peer_comm import (
@@ -42,6 +44,7 @@ class RadioAgent:
         self.agent_id = str(uuid.uuid4())[:8]
         self._loop: asyncio.AbstractEventLoop | None = None
         self._generation_task: asyncio.Task | None = None
+        self._adc_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
 
         # Context
@@ -72,18 +75,20 @@ class RadioAgent:
 
         # Hardware
         self.leds = LEDController(CONFIG)
-        self.mic = MicController(max_seconds=CONFIG.get("CALLIN_MAX_SECONDS", 15))
+        self.mic = MicController(config=CONFIG, max_seconds=CONFIG.get("CALLIN_MAX_SECONDS", 15))
+        self.nfc = NFCController(CONFIG)
+        self.display = DisplayController(CONFIG)
 
         # Content channels
         self.channels = {
-            "news": NewsChannel(self.context, CONFIG),
+            "dailybrief": DailyBriefChannel(self.context, CONFIG),
             "talkshow": TalkShowChannel(self.context, CONFIG),
-            "sports": SportsChannel(self.context, CONFIG),
-            "dj": DJChannel(self.context, CONFIG, self.spotify, self.music_manager),
+            "music": MusicChannel(self.context, CONFIG, self.spotify, self.music_manager),
+            "memos": MemosChannel(self.context, CONFIG),
         }
 
         # State
-        self.active_channel = "news"
+        self.active_channel = "dailybrief"
         self.active_subchannel = "local"
 
         # Networking (agent-to-agent)
@@ -111,7 +116,6 @@ class RadioAgent:
             response_text = await channel.generate_cohost_response(
                 statement, self.active_subchannel
             )
-            # Play the response locally
             voice_id = channel.get_cohost_voice_id() if hasattr(channel, "get_cohost_voice_id") else channel.get_voice_id("")
             audio = await self.tts.synthesize(response_text, voice_id)
             self.player.enqueue_mp3(audio)
@@ -154,10 +158,11 @@ class RadioAgent:
         elif event.event_type == "volume_change":
             self.player.volume = event.volume / 100.0
             logger.info("Volume: %d%%", event.volume)
-
-        elif event.event_type == "volume_mute":
-            self.player.toggle_mute()
-            logger.info("Muted" if self.player.muted else "Unmuted")
+            self.display.update(
+                channel=CHANNELS.get(self.active_channel, {}).get("name", self.active_channel),
+                subchannel=get_subchannel_name(self.active_channel, self.active_subchannel),
+                volume=event.volume,
+            )
 
         elif event.event_type == "callin_start":
             self.leds.set_callin(True)
@@ -165,6 +170,9 @@ class RadioAgent:
 
         elif event.event_type == "callin_stop":
             await self._handle_callin()
+
+        elif event.event_type == "nfc_press":
+            await self._handle_nfc()
 
     async def _switch_channel(self, channel: str):
         """Switch to a different content channel."""
@@ -195,6 +203,13 @@ class RadioAgent:
         self.active_subchannel = resolve_subchannel(channel, self.input.dial_position)
         self.leds.activate(channel)
         self.discovery.update_channel(channel)
+
+        # Update display
+        self.display.update(
+            channel=CHANNELS[channel]["name"],
+            subchannel=get_subchannel_name(channel, self.active_subchannel),
+            volume=self.input.volume,
+        )
 
         # Start new content generation
         new_ch = self.channels[channel]
@@ -230,6 +245,13 @@ class RadioAgent:
         self.channels[self.active_channel].reset()
         self._generation_task = asyncio.create_task(self._content_loop())
 
+        # Update display
+        self.display.update(
+            channel=CHANNELS[self.active_channel]["name"],
+            subchannel=name,
+            volume=self.input.volume,
+        )
+
     async def _handle_callin(self):
         """Process a completed call-in recording."""
         self.leds.blink_callin()
@@ -250,7 +272,6 @@ class RadioAgent:
         # Check if we should forward to a peer
         peers = self.discovery.get_peers_on_channel(self.active_channel)
         if peers:
-            # Forward to first peer
             peer = peers[0]
             logger.info("Forwarding call-in to peer %s", peer['agent_id'])
             await self.peer_client.send_to_peer(
@@ -262,6 +283,31 @@ class RadioAgent:
         async for chunk in channel.handle_callin(transcript):
             audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
             self.player.enqueue_mp3(audio)
+
+    async def _handle_nfc(self):
+        """Read NFC tag and integrate its contents."""
+        if not self.nfc.available:
+            logger.info("NFC reader not available")
+            return
+
+        logger.info("Reading NFC tag...")
+        text = self.nfc.read_tag(timeout=3.0)
+        if not text:
+            logger.info("No NFC tag found or tag empty")
+            return
+
+        logger.info("NFC tag content: %s", text[:100])
+
+        # Add to memos channel
+        memos = self.channels.get("memos")
+        if hasattr(memos, "add_memo_from_nfc"):
+            memos.add_memo_from_nfc(text)
+
+        # Announce via TTS
+        voice_id = CONFIG["VOICES"].get("memo_host", "pNInz6obpgDQGcFmaJgB")
+        announcement = f"NFC tag received. Content saved to memos: {text[:80]}"
+        audio = await self.tts.synthesize(announcement, voice_id)
+        self.player.enqueue_mp3(audio)
 
     async def _content_loop(self):
         """Continuously generate and play content for the current channel."""
@@ -291,26 +337,13 @@ class RadioAgent:
         if peers and self.active_channel == "talkshow":
             peer = peers[0]
             logger.info("Co-hosting with peer %s!", peer['agent_id'])
-            # Co-host mode will be triggered automatically when content generates
-            # The content loop generates statements, and we send them to the peer
-
-    async def _cohost_loop(self, peer: dict):
-        """Run co-host mode: generate statement, send to peer, play their response."""
-        channel = self.channels.get("talkshow")
-        if not isinstance(channel, TalkShowChannel):
-            return
-
-        while not self._stop_event.is_set():
-            # Generate our statement
-            ctx = await self.context.get_context()
-            prompt = channel.get_system_prompt(self.active_subchannel, ctx)
-
-            # ... (simplified: the content_loop already generates statements)
-            await asyncio.sleep(30)  # Co-host exchange every 30s
 
     async def run(self):
         """Main entry point — start everything and run until interrupted."""
         self._loop = asyncio.get_event_loop()
+
+        # Show startup splash on e-ink
+        self.display.show_startup()
 
         # Start audio playback
         self.player.start()
@@ -325,6 +358,11 @@ class RadioAgent:
 
         # Set initial state
         self.leds.activate(self.active_channel)
+        self.display.update(
+            channel=CHANNELS[self.active_channel]["name"],
+            subchannel=get_subchannel_name(self.active_channel, self.active_subchannel),
+            volume=self.input.volume,
+        )
 
         logger.info("=" * 50)
         logger.info("  RadioAgent %s is ON THE AIR", self.agent_id)
@@ -334,17 +372,20 @@ class RadioAgent:
         # Start content generation
         self._generation_task = asyncio.create_task(self._content_loop())
 
+        # Start ADC polling for slide potentiometers (if hardware present)
+        if self.input._use_gpio:
+            self._adc_task = asyncio.create_task(self.input.start_adc_polling())
+
         # Start keyboard simulator if not on Pi
         if not self.input._use_gpio:
             async def _keyboard_then_stop():
                 await self.input.run_keyboard_simulator()
-                # Keyboard simulator exited (user pressed q / Ctrl+C)
                 self._stop_event.set()
             keyboard_task = asyncio.create_task(_keyboard_then_stop())
         else:
             keyboard_task = None
 
-        # Wait for shutdown signal (Ctrl+C or 'q' from keyboard sim)
+        # Wait for shutdown signal
         self._sigint_count = 0
 
         def _signal_handler():
@@ -353,7 +394,6 @@ class RadioAgent:
                 logger.info("Ctrl+C received, shutting down gracefully...")
                 self._stop_event.set()
             else:
-                # Second Ctrl+C = force exit
                 logger.warning("Force exit!")
                 os._exit(1)
 
@@ -374,10 +414,19 @@ class RadioAgent:
             except (asyncio.CancelledError, Exception):
                 pass
 
+        if self._adc_task:
+            self._adc_task.cancel()
+            try:
+                await self._adc_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         await self.peer_server.stop()
         self.discovery.shutdown()
         self.player.stop()
         self.mic.cleanup()
+        self.nfc.cleanup()
+        self.display.cleanup()
         self.leds.cleanup()
         self.input.cleanup()
 

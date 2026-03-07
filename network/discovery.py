@@ -24,7 +24,7 @@ class AgentDiscovery:
         self._on_peer_found: Callable | None = None
         self._on_peer_lost: Callable | None = None
 
-    def register(self, interests: list[str] | None = None, channel: str = "news"):
+    def register(self, interests: list[str] | None = None, channel: str = "dailybrief"):
         """Advertise this agent on the local network."""
         hostname = socket.gethostname()
         try:

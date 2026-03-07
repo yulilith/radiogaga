@@ -5,8 +5,8 @@ from log import get_logger
 logger = get_logger(__name__)
 
 CHANNELS = {
-    "news": {
-        "name": "News & Weather",
+    "dailybrief": {
+        "name": "Daily Brief",
         "btn_pin": 5,
         "led_pin": 12,
         "subchannels": [
@@ -20,7 +20,7 @@ CHANNELS = {
     "talkshow": {
         "name": "Talk Show",
         "btn_pin": 6,
-        "led_pin": 16,
+        "led_pin": 22,
         "subchannels": [
             {"id": "tech", "name": "Tech Talk", "dial_min": 0, "dial_max": 20},
             {"id": "popculture", "name": "Pop Culture", "dial_min": 21, "dial_max": 40},
@@ -29,22 +29,10 @@ CHANNELS = {
             {"id": "advice", "name": "Advice Column", "dial_min": 81, "dial_max": 100},
         ],
     },
-    "sports": {
-        "name": "Sports",
+    "music": {
+        "name": "Music",
         "btn_pin": 13,
-        "led_pin": 20,
-        "subchannels": [
-            {"id": "basketball", "name": "Basketball", "dial_min": 0, "dial_max": 20},
-            {"id": "football", "name": "Football", "dial_min": 21, "dial_max": 40},
-            {"id": "soccer", "name": "Soccer", "dial_min": 41, "dial_max": 60},
-            {"id": "f1", "name": "Formula 1", "dial_min": 61, "dial_max": 80},
-            {"id": "baseball", "name": "Baseball", "dial_min": 81, "dial_max": 100},
-        ],
-    },
-    "dj": {
-        "name": "DJ & Music",
-        "btn_pin": 19,
-        "led_pin": 21,
+        "led_pin": 23,
         "subchannels": [
             {"id": "top_tracks", "name": "My Top Tracks", "dial_min": 0, "dial_max": 20},
             {"id": "discover", "name": "Discover", "dial_min": 21, "dial_max": 40},
@@ -53,6 +41,12 @@ CHANNELS = {
             {"id": "decade", "name": "Decade", "dial_min": 81, "dial_max": 100},
         ],
     },
+    "memos": {
+        "name": "Memos",
+        "btn_pin": 26,
+        "led_pin": 27,
+        "subchannels": [],
+    },
 }
 
 
@@ -60,6 +54,8 @@ def resolve_subchannel(channel_id: str, dial_position: int) -> str:
     """Map a dial position (0-100) to a subchannel ID."""
     channel = CHANNELS.get(channel_id)
     if not channel:
+        return ""
+    if not channel["subchannels"]:
         return ""
     for sub in channel["subchannels"]:
         if sub["dial_min"] <= dial_position <= sub["dial_max"]:

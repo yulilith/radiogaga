@@ -1,6 +1,6 @@
-"""Hardware input controller for buttons and rotary encoders.
+"""Hardware input controller for buttons and slide potentiometers.
 
-On Raspberry Pi: uses RPi.GPIO for real hardware.
+On Raspberry Pi 5: uses RPi.GPIO for buttons, spidev + MCP3008 for analog pots.
 On other platforms: provides a keyboard-based simulator for development.
 """
 
@@ -17,9 +17,9 @@ logger = get_logger(__name__)
 
 @dataclass
 class InputEvent:
-    event_type: str                # "button_press", "dial_change", "dial_click",
-                                    # "volume_change", "volume_mute", "callin_start",
-                                    # "callin_stop"
+    event_type: str                # "button_press", "dial_change",
+                                    # "volume_change", "callin_start",
+                                    # "callin_stop", "nfc_press"
     channel: str | None = None      # Channel ID for button_press
     dial_position: int = 50         # 0-100 for dial_change
     subchannel: str | None = None   # Resolved subchannel name
@@ -27,14 +27,13 @@ class InputEvent:
 
 
 class InputController:
-    """Handles physical input from buttons and rotary encoders."""
+    """Handles physical input from buttons and slide potentiometers."""
 
     BUTTON_MAP = {
-        5: "news",
+        5: "dailybrief",
         6: "talkshow",
-        13: "sports",
-        19: "dj",
-        26: "callin",
+        13: "music",
+        26: "memos",
     }
 
     def __init__(self, config: dict, callback: Callable[[InputEvent], None]):
@@ -42,102 +41,116 @@ class InputController:
         self.callback = callback
         self.dial_position = 50
         self.volume = 70
-        self.active_channel = "news"
+        self.active_channel = "dailybrief"
         self._callin_active = False
         self._use_gpio = False
+        self._adc = None
 
         try:
             import RPi.GPIO as GPIO
             self.GPIO = GPIO
             self._use_gpio = True
             self._setup_gpio()
+            self._setup_adc()
             logger.info("GPIO hardware initialized successfully")
         except (ImportError, RuntimeError):
             logger.info("RPi.GPIO not available, using keyboard simulator")
             self._use_gpio = False
 
     def _setup_gpio(self):
-        """Set up GPIO pins for buttons and encoders (Raspberry Pi only)."""
+        """Set up GPIO pins for buttons (Raspberry Pi 5)."""
         GPIO = self.GPIO
         GPIO.setmode(GPIO.BCM)
         pins = self.config["PINS"]
 
-        # Tuning encoder
-        GPIO.setup(pins["tuning_clk"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(pins["tuning_dt"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(pins["tuning_sw"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        self._last_tuning_clk = GPIO.input(pins["tuning_clk"])
-
-        GPIO.add_event_detect(pins["tuning_clk"], GPIO.BOTH,
-                              callback=self._tuning_callback, bouncetime=2)
-        GPIO.add_event_detect(pins["tuning_sw"], GPIO.FALLING,
-                              callback=self._tuning_click_callback, bouncetime=300)
-
-        # Volume encoder
-        GPIO.setup(pins["volume_clk"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(pins["volume_dt"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(pins["volume_sw"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        self._last_volume_clk = GPIO.input(pins["volume_clk"])
-
-        GPIO.add_event_detect(pins["volume_clk"], GPIO.BOTH,
-                              callback=self._volume_callback, bouncetime=2)
-        GPIO.add_event_detect(pins["volume_sw"], GPIO.FALLING,
-                              callback=self._volume_mute_callback, bouncetime=300)
-
-        # Content buttons + call-in
-        for pin_name in ["btn_news", "btn_talkshow", "btn_sports", "btn_dj", "btn_callin"]:
+        # Channel buttons (4)
+        for pin_name in ["btn_dailybrief", "btn_talkshow", "btn_music", "btn_memos"]:
             pin = pins[pin_name]
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            if pin_name == "btn_callin":
-                # Call-in uses press and release
-                GPIO.add_event_detect(pin, GPIO.BOTH,
-                                      callback=self._callin_callback, bouncetime=50)
-            else:
-                GPIO.add_event_detect(pin, GPIO.FALLING,
-                                      callback=self._button_callback, bouncetime=300)
+            GPIO.add_event_detect(pin, GPIO.FALLING,
+                                  callback=self._button_callback, bouncetime=300)
 
-    def _tuning_callback(self, channel):
-        pins = self.config["PINS"]
-        clk = self.GPIO.input(pins["tuning_clk"])
-        dt = self.GPIO.input(pins["tuning_dt"])
-        if clk != self._last_tuning_clk:
-            if dt != clk:
-                self.dial_position = min(100, self.dial_position + 2)
-            else:
-                self.dial_position = max(0, self.dial_position - 2)
-            subchannel = resolve_subchannel(self.active_channel, self.dial_position)
-            logger.debug("Dial change",
-                         extra={"channel": self.active_channel,
-                                "position": self.dial_position,
-                                "subchannel": subchannel})
-            self.callback(InputEvent(
-                event_type="dial_change",
-                channel=self.active_channel,
-                dial_position=self.dial_position,
-                subchannel=subchannel,
-            ))
-        self._last_tuning_clk = clk
+        # Call-in button (press-and-hold)
+        pin = pins["btn_callin"]
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.add_event_detect(pin, GPIO.BOTH,
+                              callback=self._callin_callback, bouncetime=50)
 
-    def _tuning_click_callback(self, channel):
-        logger.debug("Dial click")
-        self.callback(InputEvent(event_type="dial_click"))
+        # NFC / system update button
+        pin = pins["btn_nfc"]
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.add_event_detect(pin, GPIO.FALLING,
+                              callback=self._nfc_button_callback, bouncetime=300)
 
-    def _volume_callback(self, channel):
-        pins = self.config["PINS"]
-        clk = self.GPIO.input(pins["volume_clk"])
-        dt = self.GPIO.input(pins["volume_dt"])
-        if clk != self._last_volume_clk:
-            if dt != clk:
-                self.volume = min(100, self.volume + 3)
-            else:
-                self.volume = max(0, self.volume - 3)
-            logger.debug("Volume change", extra={"volume": self.volume})
-            self.callback(InputEvent(event_type="volume_change", volume=self.volume))
-        self._last_volume_clk = clk
+    def _setup_adc(self):
+        """Set up MCP3008 ADC over SPI for HW-233 slide potentiometers."""
+        try:
+            import spidev
+            adc_cfg = self.config.get("ADC", {})
+            self._adc = spidev.SpiDev()
+            self._adc.open(adc_cfg.get("spi_bus", 0), adc_cfg.get("spi_device", 1))
+            self._adc.max_speed_hz = 1_000_000
+            self._adc.mode = 0
+            logger.info("MCP3008 ADC initialized on SPI0 CE1")
+        except (ImportError, OSError) as e:
+            logger.warning("SPI ADC not available: %s", e)
+            self._adc = None
 
-    def _volume_mute_callback(self, channel):
-        logger.debug("Volume mute toggled")
-        self.callback(InputEvent(event_type="volume_mute"))
+    def _read_adc(self, channel: int) -> int:
+        """Read a 10-bit value from MCP3008 channel (0-7). Returns 0-1023."""
+        if not self._adc:
+            return 512
+        cmd = [1, (8 + channel) << 4, 0]
+        result = self._adc.xfer2(cmd)
+        return ((result[1] & 0x03) << 8) | result[2]
+
+    def _adc_to_percent(self, raw: int) -> int:
+        """Convert 10-bit ADC value (0-1023) to 0-100."""
+        return max(0, min(100, int(raw * 100 / 1023)))
+
+    async def start_adc_polling(self):
+        """Poll slide potentiometers and emit events on change."""
+        if not self._adc:
+            return
+
+        adc_cfg = self.config.get("ADC", {})
+        interval = adc_cfg.get("poll_interval_ms", 50) / 1000.0
+        deadzone = adc_cfg.get("deadzone", 2)
+        tuning_ch = adc_cfg.get("tuning_channel", 0)
+        volume_ch = adc_cfg.get("volume_channel", 1)
+
+        last_tuning = self.dial_position
+        last_volume = self.volume
+
+        logger.info("ADC polling started",
+                    extra={"interval_ms": adc_cfg.get("poll_interval_ms", 50),
+                           "deadzone": deadzone})
+
+        while True:
+            raw_tuning = self._read_adc(tuning_ch)
+            tuning = self._adc_to_percent(raw_tuning)
+            if abs(tuning - last_tuning) > deadzone:
+                last_tuning = tuning
+                self.dial_position = tuning
+                subchannel = resolve_subchannel(self.active_channel, tuning)
+                self.callback(InputEvent(
+                    event_type="dial_change",
+                    channel=self.active_channel,
+                    dial_position=tuning,
+                    subchannel=subchannel,
+                ))
+
+            raw_volume = self._read_adc(volume_ch)
+            volume = self._adc_to_percent(raw_volume)
+            if abs(volume - last_volume) > deadzone:
+                last_volume = volume
+                self.volume = volume
+                self.callback(InputEvent(
+                    event_type="volume_change",
+                    volume=volume,
+                ))
+
+            await asyncio.sleep(interval)
 
     def _button_callback(self, channel):
         channel_id = self.BUTTON_MAP.get(channel)
@@ -161,13 +174,17 @@ class InputController:
             logger.debug("Call-in button released")
             self.callback(InputEvent(event_type="callin_stop"))
 
+    def _nfc_button_callback(self, channel):
+        logger.debug("NFC/system button pressed")
+        self.callback(InputEvent(event_type="nfc_press"))
+
     async def run_keyboard_simulator(self):
         """Keyboard-based input simulator for development without hardware."""
         logger.info("Keyboard simulator started")
-        logger.info("Controls: 1-4=channels, a/d=tune, w/s=volume, c=call-in, m=mute, q=quit")
+        logger.info("Controls: 1-4=channels, a/d=tune, w/s=volume, c=call-in, n=nfc, q=quit")
 
         loop = asyncio.get_event_loop()
-        channel_keys = {"1": "news", "2": "talkshow", "3": "sports", "4": "dj"}
+        channel_keys = {"1": "dailybrief", "2": "talkshow", "3": "music", "4": "memos"}
 
         while True:
             key = await loop.run_in_executor(None, self._get_key)
@@ -204,8 +221,8 @@ class InputController:
                 else:
                     self._callin_active = False
                     self.callback(InputEvent(event_type="callin_stop"))
-            elif key == "m":
-                self.callback(InputEvent(event_type="volume_mute"))
+            elif key == "n":
+                self.callback(InputEvent(event_type="nfc_press"))
 
     @staticmethod
     def _get_key() -> str:
@@ -218,7 +235,7 @@ class InputController:
             try:
                 tty.setraw(fd)
                 ch = sys.stdin.read(1)
-                if ch == "\x03":  # Ctrl+C
+                if ch == "\x03":
                     return "q"
                 if ch == "\x1b":
                     ch2 = sys.stdin.read(2)
@@ -233,6 +250,8 @@ class InputController:
             return input("> ").strip()
 
     def cleanup(self):
-        """Clean up GPIO resources."""
+        """Clean up GPIO and SPI resources."""
         if self._use_gpio:
             self.GPIO.cleanup()
+        if self._adc:
+            self._adc.close()
