@@ -1,5 +1,7 @@
 import asyncio
 import random
+import shutil
+import subprocess
 import time
 from typing import Any
 
@@ -10,9 +12,16 @@ from log import get_logger, log_api_call
 
 logger = get_logger(__name__)
 
+LIBRESPOT_DEVICE_KEYWORDS = ("librespot", "raspotify", "radioagent", "raspberry")
+
 
 class SpotifyService:
-    """Spotify Web API wrapper for DJ mode: auth, playback, discovery."""
+    """Spotify Web API wrapper for DJ mode: auth, playback, discovery.
+
+    Supports two playback modes controlled by SPOTIFY_PLAYBACK_MODE:
+      - "mac"  : expects the Spotify desktop app (or web player) as Connect target
+      - "pi"   : expects librespot / raspotify running as a system service
+    """
 
     SCOPES = " ".join([
         "user-read-playback-state",
@@ -24,7 +33,8 @@ class SpotifyService:
     ])
 
     def __init__(self, client_id: str, client_secret: str,
-                 redirect_uri: str = "http://127.0.0.1:8888/callback"):
+                 redirect_uri: str = "http://127.0.0.1:8888/callback",
+                 playback_mode: str = "pi"):
         self.auth_manager = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
@@ -34,37 +44,156 @@ class SpotifyService:
         )
         self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         self._device_id: str | None = None
+        self.playback_mode = playback_mode.lower()
+        self._device_ready = False
+        logger.info("Spotify playback mode: %s", self.playback_mode)
 
-    def get_device_id(self) -> str | None:
-        """Find the active Spotify device (or librespot device on Pi)."""
+    # ------------------------------------------------------------------
+    # Device discovery
+    # ------------------------------------------------------------------
+
+    def _list_devices(self) -> list[dict]:
+        """Fetch available Spotify Connect devices."""
         t0 = time.monotonic()
         try:
-            devices = self.sp.devices()
+            resp = self.sp.devices()
             elapsed = (time.monotonic() - t0) * 1000
             log_api_call(logger, "spotify", "/devices",
                          status="ok", duration_ms=elapsed)
-
-            for d in devices.get("devices", []):
-                if d.get("is_active"):
-                    self._device_id = d["id"]
-                    logger.info("Active Spotify device found",
-                                extra={"device_name": d.get("name", "unknown")})
-                    return d["id"]
-            # If no active device, pick the first one
-            if devices.get("devices"):
-                self._device_id = devices["devices"][0]["id"]
-                logger.info("Using first available Spotify device",
-                            extra={"device_name": devices["devices"][0].get("name", "unknown")})
-                return self._device_id
-
-            logger.warning("No Spotify devices found")
-            return None
+            return resp.get("devices", [])
         except Exception as e:
             elapsed = (time.monotonic() - t0) * 1000
-            logger.error("Failed to get Spotify devices: %s", e)
+            logger.error("Failed to list Spotify devices: %s", e)
             log_api_call(logger, "spotify", "/devices",
                          status="exception", duration_ms=elapsed)
             raise
+
+    @staticmethod
+    def _is_librespot_device(device: dict) -> bool:
+        name = (device.get("name") or "").lower()
+        return any(kw in name for kw in LIBRESPOT_DEVICE_KEYWORDS)
+
+    def _pick_device(self, devices: list[dict]) -> dict | None:
+        """Select the best device for the current playback mode."""
+        if not devices:
+            return None
+
+        if self.playback_mode == "pi":
+            for d in devices:
+                if self._is_librespot_device(d):
+                    return d
+
+        for d in devices:
+            if d.get("is_active"):
+                return d
+
+        return devices[0]
+
+    def get_device_id(self) -> str | None:
+        """Find the best Spotify Connect device for the current mode."""
+        devices = self._list_devices()
+        chosen = self._pick_device(devices)
+        if chosen:
+            self._device_id = chosen["id"]
+            logger.info("Spotify device selected",
+                        extra={"device_name": chosen.get("name"),
+                               "mode": self.playback_mode})
+            return self._device_id
+
+        logger.warning("No Spotify devices found", extra={"mode": self.playback_mode})
+        return None
+
+    # ------------------------------------------------------------------
+    # Librespot lifecycle (Pi mode only)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def is_librespot_running() -> bool:
+        """Check whether a librespot / raspotify process is alive."""
+        if not shutil.which("systemctl"):
+            return False
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "raspotify"],
+                capture_output=True, timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    @staticmethod
+    def start_librespot() -> bool:
+        """Attempt to start the raspotify systemd service."""
+        if not shutil.which("systemctl"):
+            logger.warning("systemctl not available — cannot manage raspotify")
+            return False
+        try:
+            subprocess.run(
+                ["sudo", "systemctl", "start", "raspotify"],
+                capture_output=True, timeout=10, check=True,
+            )
+            logger.info("raspotify service started")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to start raspotify: %s", e)
+            return False
+        except Exception as e:
+            logger.error("Unexpected error starting raspotify: %s", e)
+            return False
+
+    async def ensure_device(self, retries: int = 3, delay: float = 2.0) -> str | None:
+        """Make sure a Spotify Connect device is available and ready.
+
+        On Pi mode: checks librespot health, starts it if needed, waits
+        for the device to appear, then transfers playback to it.
+
+        On Mac mode: just discovers the desktop app / web player device.
+
+        Returns the device id, or None if no device could be found.
+        Never raises — all API errors are caught and result in None.
+        """
+        try:
+            return await self._ensure_device_inner(retries, delay)
+        except Exception as e:
+            logger.error("ensure_device failed: %s", e)
+            self._device_ready = False
+            return None
+
+    async def _ensure_device_inner(self, retries: int, delay: float) -> str | None:
+        if self._device_ready and self._device_id:
+            devices = self._list_devices()
+            if any(d["id"] == self._device_id for d in devices):
+                return self._device_id
+            self._device_ready = False
+
+        if self.playback_mode == "pi":
+            if not self.is_librespot_running():
+                logger.info("librespot not running, attempting to start")
+                self.start_librespot()
+                await asyncio.sleep(delay)
+
+        for attempt in range(retries):
+            device_id = await asyncio.to_thread(self.get_device_id)
+            if device_id:
+                try:
+                    await asyncio.to_thread(
+                        self.sp.transfer_playback, device_id, force_play=False
+                    )
+                    logger.info("Playback transferred to device",
+                                extra={"device_id": device_id, "attempt": attempt + 1})
+                except Exception as e:
+                    logger.warning("transfer_playback failed (non-fatal): %s", e)
+
+                self._device_ready = True
+                return device_id
+
+            if attempt < retries - 1:
+                logger.info("No device yet, retrying in %.1fs (attempt %d/%d)",
+                            delay, attempt + 1, retries)
+                await asyncio.sleep(delay)
+
+        logger.error("Could not find a Spotify device after %d attempts", retries)
+        return None
 
     # --- User Taste ---
 
@@ -328,10 +457,18 @@ class SpotifyService:
 
     # --- Playback Control ---
 
+    async def _resolve_device(self, device_id: str | None = None) -> str | None:
+        """Return a usable device id: explicit > cached > ensure_device."""
+        if device_id:
+            return device_id
+        if self._device_id and self._device_ready:
+            return self._device_id
+        return await self.ensure_device()
+
     async def play_track(self, track_uri: str, device_id: str | None = None):
         """Play a specific track."""
-        device = device_id or self._device_id or self.get_device_id()
-        logger.info("Playing track", extra={"track_uri": track_uri})
+        device = await self._resolve_device(device_id)
+        logger.info("Playing track", extra={"track_uri": track_uri, "device": device})
         t0 = time.monotonic()
         try:
             await asyncio.to_thread(
@@ -349,7 +486,7 @@ class SpotifyService:
 
     async def queue_track(self, track_uri: str, device_id: str | None = None):
         """Add a track to the playback queue."""
-        device = device_id or self._device_id or self.get_device_id()
+        device = await self._resolve_device(device_id)
         logger.debug("Queueing track", extra={"track_uri": track_uri})
         t0 = time.monotonic()
         try:

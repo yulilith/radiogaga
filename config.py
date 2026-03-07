@@ -14,6 +14,7 @@ CONFIG = {
     "SPOTIFY_CLIENT_ID": os.getenv("SPOTIFY_CLIENT_ID"),
     "SPOTIFY_CLIENT_SECRET": os.getenv("SPOTIFY_CLIENT_SECRET"),
     "SPOTIFY_REDIRECT_URI": os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback"),
+    "SPOTIFY_PLAYBACK_MODE": os.getenv("SPOTIFY_PLAYBACK_MODE", "pi"),  # "pi" (librespot) or "mac" (desktop app)
     "GNEWS_API_KEY": os.getenv("GNEWS_API_KEY"),
     "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID"),
     "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET"),
