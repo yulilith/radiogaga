@@ -18,6 +18,7 @@ from log import get_logger
 
 logger = get_logger(__name__)
 
+
 # ── Tunable constants ──────────────────────────────────────────────
 BREATH_RATE = 0.35           # breathing cycle speed (~4s inhale/exhale)
 DRIFT_RATE = 0.08            # how fast frequencies wander

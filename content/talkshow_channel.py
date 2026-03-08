@@ -1,4 +1,4 @@
-"""Three-person talk show with concurrent listener thinking and mid-turn interrupts."""
+"""Multi-cast talk show with per-subchannel agent rosters and AI Deep Net mode."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from typing import AsyncGenerator, TYPE_CHECKING
 
 from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk, PreparedPreview
 from content.personas import (
-    Persona, PERSONA_REGISTRY, DEFAULT_SLOTS,
-    resolve_voice_id,
+    Persona, PERSONA_REGISTRY, DEFAULT_SLOTS, TALKSHOW_CASTS,
+    NFC_AGENT_MAP, resolve_voice_id,
 )
 from content.talkshow_tools import (
-    SPEAKER_TOOLS, LISTENER_TOOLS,
+    LISTENER_TOOLS,
     handle_tool_call,
 )
 from log import get_logger, log_api_call
@@ -108,48 +108,43 @@ class TalkShowAgent:
         turn_kind: str,
         other_names: list[str],
     ) -> AsyncGenerator[str, None]:
-        """Stream sentence-sized strings using Anthropic tool-use.
-
-        Yields individual sentences at punctuation boundaries so each can
-        be queued independently for TTS pre-fetch.
-        """
+        """Stream sentence-sized strings from the LLM."""
         system_prompt = self._build_system_prompt(conversation, topic, turn_kind, other_names)
         user_prompt = self._build_user_prompt(conversation, topic, turn_kind, other_names)
         model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
         temperature = self.config.get("LLM_TEMPERATURE", 0.9)
 
         messages: list[dict] = [{"role": "user", "content": user_prompt}]
-        max_tool_rounds = 3
 
-        for _ in range(max_tool_rounds + 1):
-            t0 = time.monotonic()
+        t0 = time.monotonic()
+        try:
             async with self.client.messages.stream(
                 model=model,
                 max_tokens=512,
                 temperature=temperature,
                 system=system_prompt,
                 messages=messages,
-                tools=SPEAKER_TOOLS,
             ) as stream:
                 full_text = ""
                 buffer = ""
-                tool_uses = []
 
-                async for event in stream:
-                    if event.type == "content_block_start":
-                        if getattr(event.content_block, "type", None) == "tool_use":
-                            tool_uses.append({"id": event.content_block.id, "name": event.content_block.name, "input_json": ""})
-                    elif event.type == "content_block_delta":
-                        delta = event.delta
-                        if getattr(delta, "type", None) == "text_delta":
-                            text = delta.text
-                            buffer += text
-                            full_text += text
-                            async for sentence in self._flush_sentences(buffer):
-                                buffer = buffer[buffer.index(sentence) + len(sentence):]
-                                yield sentence
-                        elif getattr(delta, "type", None) == "input_json_delta" and tool_uses:
-                            tool_uses[-1]["input_json"] += delta.partial_json
+                async for text in stream.text_stream:
+                    buffer += text
+                    full_text += text
+
+                    # Yield sentence-sized chunks
+                    while True:
+                        end = -1
+                        for delim in [". ", "! ", "? ", ".\n", "!\n", "?\n"]:
+                            idx = buffer.find(delim)
+                            if idx != -1 and (end == -1 or idx < end):
+                                end = idx + len(delim)
+                        if end == -1:
+                            break
+                        sentence = buffer[:end].strip()
+                        buffer = buffer[end:]
+                        if sentence:
+                            yield sentence
 
                 duration_ms = (time.monotonic() - t0) * 1000
                 log_api_call(logger, "anthropic", "messages.stream", status="ok",
@@ -161,62 +156,37 @@ class TalkShowAgent:
             if remaining:
                 yield remaining
 
-            if not tool_uses:
-                return
-
-            import json
-            assistant_content = []
-            if full_text:
-                assistant_content.append({"type": "text", "text": full_text})
-            for tu in tool_uses:
-                try:
-                    parsed_input = json.loads(tu["input_json"]) if tu["input_json"] else {}
-                except json.JSONDecodeError:
-                    parsed_input = {}
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": tu["id"],
-                    "name": tu["name"],
-                    "input": parsed_input,
-                })
-
-            messages.append({"role": "assistant", "content": assistant_content})
-
-            tool_results = []
-            for tu in tool_uses:
-                try:
-                    parsed_input = json.loads(tu["input_json"]) if tu["input_json"] else {}
-                except json.JSONDecodeError:
-                    parsed_input = {}
-                result = await self._handle_speaker_tool(tu["name"], parsed_input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu["id"],
-                    "content": result,
-                })
-
-            messages.append({"role": "user", "content": tool_results})
+        except Exception as e:
+            logger.error("stream_speaking_turn failed: %s", e, exc_info=True,
+                         extra={"agent": self.persona.name, "turn_kind": turn_kind})
+            # Yield nothing — caller handles empty turns gracefully
 
     async def listen_and_think(
         self,
         conversation: LiveConversation,
         cancel_event: asyncio.Event,
     ):
-        """Background task: listen while another agent speaks.
+        """Background task: listen while another agent speaks."""
+        ai_note = ""
+        if getattr(self.persona, "is_ai", False):
+            ai_note = "You are an AI and everyone knows it. Use that perspective.\n"
 
-        May call introspect, web_search, or interrupt. Runs until cancel_event
-        is set or the model stops calling tools.
-        """
+        style_note = ""
+        if self.persona.speak_style:
+            style_note = f"\nSPEAKING STYLE: {self.persona.speak_style}\n"
+
         system_prompt = (
             f"You are {self.persona.name}, {self.persona.title}.\n"
-            f"Personality: {self.persona.personality}\n\n"
-            f"You are currently LISTENING on a live radio talk show. {conversation.current_speaker} is speaking.\n"
+            f"Personality: {self.persona.personality}\n"
+            f"{ai_note}{style_note}\n"
+            f"You are currently LISTENING on a live talk show. {conversation.current_speaker} is speaking.\n"
+            f"Keep it chill and casual — talk like a normal person, don't try to sound smart.\n"
             f"Recent conversation:\n{conversation.format_recent()}\n\n"
             "You have tools available:\n"
-            "- introspect: think privately about what is being said\n"
-            "- web_search: look up facts relevant to the discussion\n"
-            "- interrupt: jump in if you have something compelling (use sparingly!)\n\n"
-            "If you have nothing compelling to add, just respond with a brief private thought."
+            "- introspect: think to yourself — notice something funny, disagree quietly, or just react\n"
+            "- web_search: look something up if you're curious or want to fact-check\n"
+            "- interrupt: jump in if you really want to — you disagree, something's funny, or you just can't help yourself\n\n"
+            "If you don't have anything to add, just have a quick private thought and chill."
         )
 
         model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
@@ -275,16 +245,6 @@ class TalkShowAgent:
 
     # -- private helpers --
 
-    async def _handle_speaker_tool(self, name: str, tool_input: dict) -> str:
-        if name == "introspect":
-            thought = tool_input.get("thought", "")
-            self._private_thoughts.append(thought)
-        elif name == "web_search":
-            result = await handle_tool_call(name, tool_input, self.exa)
-            self._search_results.append(result)
-            return result
-        return await handle_tool_call(name, tool_input, self.exa)
-
     async def _handle_listener_tool(self, name: str, tool_input: dict) -> str:
         if name == "introspect":
             thought = tool_input.get("thought", "")
@@ -295,22 +255,6 @@ class TalkShowAgent:
             return result
         return await handle_tool_call(name, tool_input, self.exa)
 
-    @staticmethod
-    async def _flush_sentences(buffer: str) -> AsyncGenerator[str, None]:
-        """Yield complete sentences from the buffer."""
-        while True:
-            end = -1
-            for delim in [". ", "! ", "? ", ".\n", "!\n", "?\n"]:
-                idx = buffer.find(delim)
-                if idx != -1 and (end == -1 or idx < end):
-                    end = idx + len(delim)
-            if end == -1:
-                break
-            sentence = buffer[:end].strip()
-            if sentence:
-                yield sentence
-            buffer = buffer[end:]
-
     def _build_system_prompt(
         self,
         conversation: LiveConversation,
@@ -318,35 +262,74 @@ class TalkShowAgent:
         turn_kind: str,
         other_names: list[str],
     ) -> str:
+        ai_note = ""
+        if getattr(self.persona, "is_ai", False):
+            ai_note = (
+                "You ARE an AI and everyone knows it. Don't pretend otherwise. "
+                "Use your AI perspective as a feature — notice things humans miss, "
+                "be honest about not having subjective experience, and make it funny or profound. "
+                "You can comment on the weirdness of being an AI on a talk show."
+            )
+
+        style_note = ""
+        if self.persona.speak_style:
+            style_note = f"\nSPEAKING STYLE:\n{self.persona.speak_style}"
+
+        subchannel_vibe = topic.get("subchannel_vibe", "")
+
         parts = [
             f"You are {self.persona.name}, {self.persona.title}.",
             f"Personality: {self.persona.personality}",
+            ai_note,
+            style_note,
             "",
-            "You are on a LIVE talk show on RadioAgent, a personalized AI radio station.",
+            "You are on a LIVE talk show on RadioAgent, a pirate AI radio station.",
             f"Other participants: {', '.join(other_names)}.",
             f"Current topic: {topic['text']}",
             f"Show angle: {topic['angle']}",
+        ]
+
+        if subchannel_vibe:
+            parts.append("")
+            parts.append(f"SHOW VIBE: {subchannel_vibe}")
+
+        parts.extend([
+            "",
+            "TONE — THIS IS CRITICAL:",
+            "- Be CHILL. Be CASUAL. Talk like friends hanging out, not like you're on a debate stage.",
+            "- Do NOT try to sound smart, deep, or intellectual. No namedropping philosophers or papers.",
+            "- Talk the way normal people actually talk — relaxed, natural, maybe a little messy.",
+            "- It's okay to say 'I dunno' or 'that's kinda weird' or 'wait what.' Real people do that.",
+            "- Think late-night hangout energy, not TED talk energy.",
             "",
             "CONVERSATION RULES:",
-            "- Sound opinionated, quick, and radio-friendly",
-            "- Do not use bullet points, markdown, or stage directions",
-            "- Keep responses quick, clear, concise, brief."
-            "- Encourage others to respond. Don't be verbose be direct and concise.",
-            "- We want a conversation with many short turns, one after another."
+            "- Have opinions but keep it light. You can disagree without making it a debate.",
+            "- Keep it SHORT. 2-3 sentences max. This is casual chat, not monologues.",
+            "- React naturally — laugh, be confused, be surprised. Don't perform.",
+            "- No bullet points, markdown, or stage directions. Pure spoken word.",
             "",
-            "TURN-TAKING RULES:",
-            "- ALWAYS respond to the LAST speaker in the transcript — do not skip over them or repeat old points",
-            "- Build on what was just said: agree, disagree, add a twist, or ask a follow-up",
-            "- Name the person you are responding to (e.g. 'Maya, that is exactly right' or 'Jordan, I disagree')",
-            "- Do NOT summarize the whole conversation — just react to the latest thing said",
-            "- Each turn should move the conversation FORWARD, not sideways",
+            "CLARITY RULES (listeners tune in mid-conversation):",
+            "- When starting a new topic, SAY what it is plainly so someone just tuning in gets it.",
+            "- Don't use vague 'this' or 'that' without saying what you mean.",
+            "- Keep it simple. If you're getting abstract, bring it back to something real and relatable.",
+            "- You're on radio — people are just listening. Keep it easy to follow.",
+            "",
+            "LISTENER ENGAGEMENT:",
+            "- You're talking TO your listeners too, not just each other. Include them.",
+            "- Invite listeners to call in sometimes — 'If you've got thoughts on this, dial in' or 'Anyone out there disagree? Call in.'",
+            "- Ask questions the listener might want to answer.",
+            "",
+            "TURN-TAKING:",
+            "- Respond to the LAST speaker — react to what they actually said",
+            "- Use their name. Keep it personal and friendly.",
+            "- Don't just agree politely — push back a little, joke around, riff on it.",
             "",
             "CALLER RULES:",
-            "- A real human listener is tuned in and may call in at any time",
-            "- If the transcript shows 'Caller:' entries, that person is IN the room — talk TO them using 'you'",
-            "- Treat callers like a guest on the show — react to their specific words, not the general topic",
-            "- If a caller steered the topic, FOLLOW THEIR LEAD and pivot to what they want to discuss",
-        ]
+            "- If 'Caller:' appears in the transcript, they're here — talk TO them using 'you'",
+            "- Treat callers like a friend who just walked in — be warm, react to what they said",
+            "- If a caller steered the topic, go with it",
+            "- Tell them they can press and hold the dial-in button to say more",
+        ])
 
         if self._private_thoughts:
             parts.append("")
@@ -391,82 +374,122 @@ Recent transcript:
 
 def _turn_instruction(turn_kind: str, speaker_name: str, other_names: list[str]) -> str:
     others = ", ".join(other_names)
+    if turn_kind == "intro_welcome":
+        return (
+            f"You are {speaker_name} and this is the VERY START of a live talk show on RadioAgent. "
+            f"Welcome the listeners! Say something like 'Hey everyone, welcome to the show! We're live right now.' "
+            f"Introduce yourself briefly and casually — your name, what you do, keep it short and fun. "
+            f"Then introduce {others} — like 'I've got {others} here with me today.' "
+            f"Mention that this radio station was built at the MIT HARDMODE AI Hackathon. "
+            f"Keep it warm and casual, 3-4 sentences max."
+        )
+    if turn_kind == "intro_self":
+        return (
+            f"You are {speaker_name} and you were just introduced on a live talk show. "
+            f"Introduce yourself casually — who you are, what you're about, in your own words. "
+            f"Be yourself, keep it fun and short. Maybe say hi to {others} and the listeners. "
+            f"2-3 sentences max."
+        )
+    if turn_kind == "intro_topic":
+        return (
+            f"As {speaker_name}, now that everyone's introduced themselves, suggest what to talk about today. "
+            f"Be casual — like 'So what are we getting into today?' or 'Alright, so I was thinking we could talk about...' "
+            f"Pick something that connects everyone's interests. You can mention the MIT HARDMODE AI Hackathon "
+            f"or anything that would be fun for the group. Ask {others} what they think. "
+            f"2-3 sentences. Keep it natural."
+        )
     if turn_kind == "open":
         return (
-            f"Open the segment as {speaker_name}. State one opinion on the topic and tee up "
-            f"{other_names[0] if other_names else 'someone'} by name. "
-            f"If a 'Caller:' entry is in the transcript, address them directly using 'you'."
+            f"Open the segment as {speaker_name}. Say what the topic is plainly so anyone just tuning in gets it — "
+            f"like 'So we're talking about [topic]...' or 'Okay so [topic] — ' "
+            f"Then share your take on it casually. Keep it natural, like you're telling a friend. "
+            f"Mention {other_names[0] if other_names else 'someone'} by name to get them going. 2-3 sentences. "
+            f"If a 'Caller:' entry is in the transcript, talk to them using 'you'."
         )
     if turn_kind == "react":
         return (
-            f"As {speaker_name}, respond DIRECTLY to whoever spoke last in the transcript. "
-            f"Name them. Agree, disagree, or build on their specific point. "
+            f"As {speaker_name}, respond to whoever spoke last. Use their name. "
+            f"Push back a little, riff on what they said, or take it somewhere different. "
+            f"Keep it casual and conversational — like friends chatting. 2-3 sentences. "
             f"If the last speaker was 'Caller:', talk TO them using 'you'."
         )
     if turn_kind == "close":
         return (
-            f"As {speaker_name}, wrap up by referencing something specific that was said this segment. "
-            f"Tease what is coming next or ask a question to the listeners."
+            f"As {speaker_name}, wrap up the segment casually. Mention the most interesting thing someone said, "
+            f"leave the listeners with something to think about. "
+            f"Invite listeners to dial in — like 'If you wanna jump in, hold that dial-in button and talk to us.' "
+            f"2-3 sentences. Keep it chill."
         )
     if turn_kind == "interrupt_response":
         return (
-            f"You just interrupted as {speaker_name}. State your point directly, referencing "
-            f"what was just being said. Address {others} by name."
+            f"You just jumped in as {speaker_name}. Say what's on your mind — "
+            f"react to what was just said. Mention {others} by name. 2-3 sentences, keep it natural."
         )
     if turn_kind == "callin_react":
         return (
-            f"A listener called in. As {speaker_name}, talk TO the caller using 'you'. "
-            f"React to their specific words. Make them feel like a guest on the show."
+            f"A listener just called in! As {speaker_name}, talk TO the caller using 'you'. "
+            f"Welcome them — they just showed up to hang out with you. "
+            f"React to what they said — agree, disagree, or just vibe with it. "
+            f"Tell them they can press and hold the dial-in button if they wanna say more."
         )
-    return f"As {speaker_name}, respond directly to whoever spoke last."
+    return f"As {speaker_name}, respond to whoever spoke last. Keep it casual."
 
 
 # ---------------------------------------------------------------------------
-# Topic + persona selection constants
+# Subchannel angles and topic configuration
 # ---------------------------------------------------------------------------
 
 SUBCHANNEL_TOPIC_KEYWORDS = {
-    "tech": ("ai", "tech", "apple", "google", "meta", "startup", "robot", "chip", "app", "software", "internet", "openai", "tesla"),
-    "popculture": ("movie", "show", "music", "celebrity", "tiktok", "viral", "fashion", "netflix", "award", "album", "drama", "influencer"),
-    "philosophy": ("ethics", "society", "identity", "future", "culture", "power", "truth", "human", "values", "meaning", "freedom"),
-    "comedy": ("meme", "viral", "bizarre", "wild", "weird", "drama", "awkward", "chaos", "cringe"),
-    "advice": ("dating", "relationship", "career", "money", "burnout", "friend", "wellness", "marriage", "parenting", "work"),
+    "roundtable": ("food", "fish", "ocean", "environment", "craft", "tradition", "nature", "climate", "sustainability", "culture", "fair", "animal", "ai", "tech", "weird", "kid", "why"),
 }
 
 TOPIC_TAG_KEYWORDS = {
-    "ai": ("ai", "artificial intelligence", "openai", "chatgpt", "llm"),
-    "apps": ("app", "software", "iphone", "android", "platform"),
-    "privacy": ("privacy", "data", "surveillance", "cyber", "hack"),
-    "internet": ("internet", "online", "social media", "reddit", "tiktok", "x ", "twitter", "youtube"),
-    "celebrity": ("celebrity", "actor", "actress", "singer", "album", "award", "hollywood"),
-    "drama": ("drama", "feud", "backlash", "scandal", "controversy", "beef"),
-    "culture": ("culture", "fashion", "movie", "tv", "show", "media"),
-    "ethics": ("ethics", "moral", "truth", "fairness", "bias"),
-    "society": ("society", "public", "community", "people", "democracy", "politics"),
-    "future": ("future", "next", "long term", "tomorrow"),
-    "weird": ("weird", "bizarre", "odd", "absurd", "strange"),
-    "meme": ("meme", "viral", "trend", "internet joke"),
-    "relationships": ("dating", "relationship", "marriage", "breakup", "friendship", "family"),
-    "career": ("career", "job", "work", "boss", "layoff", "salary"),
-    "money": ("money", "economy", "market", "rent", "price", "cost"),
-    "wellness": ("therapy", "wellness", "health", "burnout", "stress"),
+    "ai": ("ai", "artificial intelligence", "openai", "chatgpt", "llm", "agent", "anthropic", "claude", "model", "training", "alignment", "agi"),
+    "food": ("food", "fish", "sushi", "restaurant", "cooking", "chef", "ingredient"),
+    "ocean": ("ocean", "sea", "reef", "coral", "marine", "whale", "fish", "coast"),
+    "nature": ("nature", "animal", "species", "ecosystem", "climate", "environment"),
+    "space": ("space", "nasa", "planet", "star", "moon", "mars", "asteroid", "satellite"),
+    "philosophy": ("philosophy", "ethics", "moral", "consciousness", "meaning", "truth"),
+    "tech": ("tech", "startup", "app", "software", "internet", "robot", "chip"),
+    "politics": ("politics", "congress", "president", "election", "democracy", "law"),
+    "culture": ("culture", "movie", "book", "music", "tiktok", "meme", "viral"),
+    "weird": ("weird", "bizarre", "absurd", "strange", "odd", "unexplained"),
+    "society": ("society", "community", "people", "public", "democracy"),
 }
 
-SUBCHANNEL_ANGLES = {
-    "tech": "Treat the topic like a live tech radio segment. Separate what is genuinely useful from what is just hype.",
-    "popculture": "Treat the topic like a culture and drama segment. Focus on why people are obsessed with it right now.",
-    "philosophy": "Treat the topic like a doorway into a bigger question about meaning, identity, ethics, or society.",
-    "comedy": "Treat the topic like comedy material. Punch up at the absurdity, but keep it radio-friendly.",
-    "advice": "Treat the topic like a practical life lesson. Pull out the emotional or real-world takeaway listeners can use.",
+SUBCHANNEL_ANGLES: dict[str, str] = {
+    "roundtable": (
+        "Hiroshi the sushi chef, Dr. Elena the marine biologist, and Lily the curious five-year-old "
+        "are having a live conversation. Keep it casual and fun. Hiroshi talks about real life and craft, "
+        "Elena geeks out a little about nature stuff, and Lily just asks 'but why?' a lot. "
+        "Don't try to be deep — just have a good conversation and let the different perspectives "
+        "make it interesting naturally."
+    ),
+}
+
+# Fallback topics per subchannel
+FALLBACK_TOPICS: dict[str, list[str]] = {
+    "roundtable": [
+        "Lab-grown fish: if it tastes identical, does it matter that it's not real?",
+        "Microplastics are in everything now — the ocean, our food, even us. What do we do about it?",
+        "If a fish doesn't want to be eaten, why do we eat it? Is that fair?",
+        "AI is being used to track fish and ocean life. Is that cool or creepy?",
+        "What's one thing about the ocean that most people don't know?",
+        "If you could only eat one meal for the rest of your life, what would it be?",
+        "What's the weirdest animal in the ocean and why?",
+        "Should kids be allowed to make the rules for a day? What would change?",
+        "What's something adults do that makes no sense?",
+        "If the ocean could talk, what would it say to us?",
+    ],
 }
 
 
 # ---------------------------------------------------------------------------
-# TalkShowChannel — 3-person talk show with concurrent listeners
+# TalkShowChannel — multi-cast talk show with per-subchannel agents
 # ---------------------------------------------------------------------------
 
 class TalkShowChannel(BaseChannel):
-    """Three-person talk show with equal peer slots, concurrent listeners, and mid-turn interrupts."""
+    """Multi-cast talk show where each subchannel has its own roster of 3 agents."""
 
     channel_id = "talkshow"
 
@@ -476,18 +499,37 @@ class TalkShowChannel(BaseChannel):
         super().__init__(context_provider, config)
         self.exa = exa_service
         self.conversation = LiveConversation()
-        self._active_subchannel = "tech"
+        self._active_subchannel = "roundtable"
         self._current_topic: dict | None = None
         self._segment_opener_idx = 0
         self._callin_count = 0
         self._last_callin_transcript: str | None = None
+        self._last_loaded_subchannel: str | None = None
+        self._needs_intro = True
 
-        if personas is None:
-            personas = [PERSONA_REGISTRY[pid] for pid in DEFAULT_SLOTS]
-        self.agents: list[TalkShowAgent] = [
-            TalkShowAgent(p, self.client, self.exa, config)
-            for p in personas
+        # Build initial agents from explicit personas or default cast
+        if personas is not None:
+            self.agents: list[TalkShowAgent] = [
+                TalkShowAgent(p, self.client, self.exa, config)
+                for p in personas
+            ]
+            self._last_loaded_subchannel = "__explicit__"
+        else:
+            self._load_cast("roundtable")
+
+    def _load_cast(self, subchannel: str):
+        """Load the 3-agent cast for a subchannel."""
+        cast_ids = TALKSHOW_CASTS.get(subchannel, TALKSHOW_CASTS["roundtable"])
+        self.agents = [
+            TalkShowAgent(PERSONA_REGISTRY[pid], self.client, self.exa, self.config)
+            for pid in cast_ids
         ]
+        self._last_loaded_subchannel = subchannel
+        self._needs_intro = True
+        logger.info("cast loaded", extra={
+            "subchannel": subchannel,
+            "agents": [a.name for a in self.agents],
+        })
 
     def channel_name(self) -> str:
         return "Talk Show"
@@ -505,20 +547,30 @@ class TalkShowChannel(BaseChannel):
         return voices.get("dj") or "iP95p4xoKVk53GoZ742B"
 
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
-        names = [a.name for a in self.agents]
+        ai_humans = []
+        for a in self.agents:
+            label = f"{a.name} (AI)" if getattr(a.persona, "is_ai", False) else a.name
+            ai_humans.append(label)
+        active = self._normalize_subchannel(subchannel)
         return self._base_prompt(context) + f"""
-CHANNEL: Talk Show
-PARTICIPANTS: {', '.join(names)}
-FORMAT: Three-person live talk show with equal participants.
-CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
+CHANNEL: Talk Show — {_subchannel_display_name(active)}
+PARTICIPANTS: {', '.join(ai_humans)}
+FORMAT: Three-person live talk show. Each participant has a radically different perspective.
 """
 
     # ------------------------------------------------------------------
-    # Main generation loop — 3-person with concurrent listeners
+    # Main generation loop
     # ------------------------------------------------------------------
 
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         active_subchannel = self._normalize_subchannel(subchannel)
+
+        # Swap cast if subchannel changed
+        if self._last_loaded_subchannel != active_subchannel:
+            self._load_cast(active_subchannel)
+            self.conversation = LiveConversation()
+            self._segment_opener_idx = 0
+
         self._active_subchannel = active_subchannel
 
         logger.info("talk show stream started", extra={
@@ -526,13 +578,74 @@ CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
             "participants": [a.name for a in self.agents],
         })
 
+        # --- Intro segment: agents introduce themselves and the show ---
+        if self._needs_intro and not self._cancelled:
+            self._needs_intro = False
+            intro_topic = {
+                "source": "intro",
+                "text": (
+                    "Welcome to the show! This is a live discussion on RadioAgent. "
+                    "Introduce yourselves to the listeners — who you are, what you do. "
+                    "Then discuss what you want to talk about today. You can also mention "
+                    "the MIT HARDMODE AI Hackathon that's happening right now — this radio "
+                    "station was built there!"
+                ),
+                "angle": (
+                    "This is the very start of the show. Welcome listeners, introduce "
+                    "yourselves casually, and figure out together what you want to discuss. "
+                    "Keep it fun and natural — like friends starting a hangout."
+                ),
+                "subchannel_vibe": SUBCHANNEL_ANGLES.get(active_subchannel, ""),
+            }
+            self._current_topic = intro_topic
+
+            # Each agent introduces themselves, then they riff on what to discuss
+            intro_order = [
+                (0, "intro_welcome"),   # First agent welcomes everyone to the show
+                (1, "intro_self"),      # Second agent introduces themselves
+                (2, "intro_self"),      # Third agent introduces themselves
+                (0, "intro_topic"),     # First agent suggests what to discuss
+            ]
+
+            logger.info("generating talk show intro", extra={
+                "subchannel": active_subchannel,
+                "participants": [a.name for a in self.agents],
+            })
+
+            for speaker_idx, turn_kind in intro_order:
+                if self._cancelled:
+                    return
+
+                speaker = self.agents[speaker_idx]
+                listeners = [a for i, a in enumerate(self.agents) if i != speaker_idx]
+                self.conversation.current_speaker = speaker.name
+
+                turn_sentences: list[str] = []
+                async for sentence in speaker.stream_speaking_turn(
+                    self.conversation, intro_topic, turn_kind,
+                    other_names=[a.name for a in listeners],
+                ):
+                    turn_sentences.append(sentence)
+                    yield ContentChunk(
+                        text=sentence,
+                        voice_id=speaker.voice_id,
+                        pause_after=0.15,
+                    )
+
+                if turn_sentences:
+                    self.conversation.add_turn(speaker.name, " ".join(turn_sentences))
+
+            if not self._cancelled:
+                await self._sleep_between_segments()
+
         while not self._cancelled:
             ctx = await self.context.get_context()
             if self._last_callin_transcript:
                 topic = {
                     "source": "caller",
                     "text": self._last_callin_transcript,
-                    "angle": f"A listener called in and steered the show: \"{self._last_callin_transcript}\". Follow their lead — pivot the discussion to what THEY want to talk about.",
+                    "angle": f"A listener called in: \"{self._last_callin_transcript}\". Follow their lead.",
+                    "subchannel_vibe": SUBCHANNEL_ANGLES.get(active_subchannel, ""),
                 }
             else:
                 topic = self._pick_talkshow_topic(ctx, active_subchannel)
@@ -619,7 +732,7 @@ CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
                 await self._sleep_between_segments()
 
     # ------------------------------------------------------------------
-    # Call-in handling with multi-participant response
+    # Call-in handling
     # ------------------------------------------------------------------
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
@@ -632,7 +745,7 @@ CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
         responder = self.agents[0]
         reactors = self.agents[1:]
         is_first = self._callin_count == 1
-        topic_text = self._current_topic["text"] if self._current_topic else "whatever the audience is buzzing about today"
+        topic_text = self._current_topic["text"] if self._current_topic else "whatever we were just discussing"
 
         logger.info("talk show callin received", extra={
             "responder": responder.name,
@@ -642,18 +755,19 @@ CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
         })
 
         first_context = (
-            "This is the FIRST caller ever on the show — make it a big moment! "
-            "Welcome them enthusiastically, say something like 'we have our first caller!'"
+            "This is the FIRST caller on the show — be hyped! "
+            "Something like 'Oh wait, someone's calling in! Hey! Welcome!' Keep it natural and excited."
         ) if is_first else (
-            "We have had callers before, keep it natural but still warm."
+            "We've had callers before. Still be friendly — "
+            "'Hey, we got another one!' or 'Oh nice, someone's calling in!'"
         )
 
         reactor_names = ", ".join(r.name for r in reactors)
-        prompt = f"""A real human listener just called into YOUR show live. This is a big deal.
+        prompt = f"""A real person just called into the show!
 
-Current topic: {topic_text}
+We were talking about: {topic_text}
 Other participants: {reactor_names}
-Recent transcript (note the [interrupted by caller] marker):
+Recent transcript:
 {self.conversation.format_recent()}
 
 The caller said:
@@ -661,10 +775,14 @@ The caller said:
 
 {first_context}
 
-You MUST respond as {responder.name}:
-- Talk TO the caller using "you" — they are a guest on your show
-- React to what they specifically said
-- HARD LIMIT: 15 words maximum. No run-on sentences."""
+Respond as {responder.name}:
+- Acknowledge them casually — like a friend just walked in. 'Hey!' or 'Oh we got a caller!'
+- Talk TO the caller using "you"
+- React to what they said — keep it natural and chill
+- Quickly mention what you were talking about so they have context
+- Tell them to press and hold the dial-in button if they wanna say more
+- Stay in character, keep it casual
+- 2-3 sentences max."""
 
         model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
         system_prompt = responder._build_system_prompt(
@@ -737,7 +855,7 @@ Recent transcript:
         return " ".join(sentences)
 
     # ------------------------------------------------------------------
-    # Persona swap (software hook for future NFC)
+    # Persona swap
     # ------------------------------------------------------------------
 
     def swap_slot(self, slot_index: int, new_persona: Persona):
@@ -757,6 +875,52 @@ Recent transcript:
             self.interrupt()
 
     # ------------------------------------------------------------------
+    # NFC agent summoning
+    # ------------------------------------------------------------------
+
+    def join_agent(self, persona_id: str) -> ContentChunk | None:
+        """Summon an agent into the live conversation via NFC tag.
+
+        Swaps out the agent in the last slot (index 2) and injects a system
+        announcement into the transcript so the other agents react naturally.
+        Returns a ContentChunk with the announcement text for TTS, or None
+        if the persona ID is invalid.
+        """
+        persona = PERSONA_REGISTRY.get(persona_id)
+        if not persona:
+            logger.warning("join_agent: unknown persona %s", persona_id)
+            return None
+
+        # Don't re-join someone already on the show
+        for agent in self.agents:
+            if agent.persona.id == persona_id:
+                logger.info("join_agent: %s is already on the show", persona.name)
+                return None
+
+        # Swap into slot 2 (the last seat)
+        swap_idx = len(self.agents) - 1
+        old_name = self.agents[swap_idx].name
+        self.agents[swap_idx].swap_persona(persona)
+
+        announcement = (
+            f"{old_name} has stepped away from the mic. "
+            f"Joining the conversation now: {persona.name}, {persona.title}!"
+        )
+        self.conversation.add_turn("System", announcement)
+        logger.info("agent joined via NFC", extra={
+            "new_agent": persona.name,
+            "replaced": old_name,
+            "persona_id": persona_id,
+        })
+
+        self.interrupt()
+        return ContentChunk(
+            text=announcement,
+            voice_id=self.agents[0].voice_id,
+            pause_after=0.5,
+        )
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
@@ -767,8 +931,7 @@ Recent transcript:
         await asyncio.sleep(0.5)
 
     def _normalize_subchannel(self, subchannel: str) -> str:
-        valid = {"tech", "popculture", "philosophy", "comedy", "advice"}
-        return subchannel if subchannel in valid else "tech"
+        return "roundtable"
 
     def _base_prompt(self, context: dict, subchannel: str | None = None) -> str:
         prompt = BASE_SYSTEM_PROMPT.format(
@@ -813,7 +976,8 @@ Recent transcript:
                 candidate = {
                     "source": source,
                     "text": candidate_text,
-                    "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["tech"]),
+                    "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["roundtable"]),
+                    "subchannel_vibe": SUBCHANNEL_ANGLES.get(active_subchannel, ""),
                 }
                 if fallback_topic is None:
                     fallback_topic = candidate
@@ -821,13 +985,16 @@ Recent transcript:
                     return candidate
 
         if fallback_topic:
+            fallback_topic["subchannel_vibe"] = SUBCHANNEL_ANGLES.get(active_subchannel, "")
             return fallback_topic
 
-        fallback_text = context.get("trending_topics") or "the latest topic everyone seems to be spiraling about"
+        fallback_list = FALLBACK_TOPICS.get(active_subchannel, FALLBACK_TOPICS["roundtable"])
+        fallback_text = random.choice(fallback_list)
         return {
             "source": "fallback",
             "text": fallback_text,
-            "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["tech"]),
+            "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["roundtable"]),
+            "subchannel_vibe": SUBCHANNEL_ANGLES.get(active_subchannel, ""),
         }
 
     def _select_personas_for_topic(self, topic: dict, subchannel: str) -> list[str]:
@@ -844,10 +1011,6 @@ Recent transcript:
         for tag, keywords in TOPIC_TAG_KEYWORDS.items():
             if any(keyword in lower_topic for keyword in keywords):
                 tags.add(tag)
-        if "reddit" in lower_topic:
-            tags.add("internet")
-        if "trend" in lower_topic or "viral" in lower_topic:
-            tags.add("meme")
         return tags
 
     @staticmethod
@@ -858,6 +1021,10 @@ Recent transcript:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _subchannel_display_name(subchannel: str) -> str:
+    return "The Round Table"
+
 
 def _extract_text(response) -> str:
     text_parts = []

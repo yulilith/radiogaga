@@ -13,7 +13,7 @@ class TTSService:
     """ElevenLabs streaming TTS with OpenAI TTS fallback."""
 
     def __init__(self, elevenlabs_key: str, openai_key: str | None = None,
-                 model: str = "eleven_flash_v2_5",
+                 model: str = "eleven_v3",
                  output_format: str = "mp3_22050_32",
                  speed: float = 1.1):
         self.elevenlabs_key = elevenlabs_key

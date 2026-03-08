@@ -234,6 +234,18 @@ def _make_agent(fake_discovery, fake_tts, channels_dict):
     agent.channels = channels_dict
     agent.active_channel = list(channels_dict.keys())[0]
     agent.active_subchannel = "local"
+    agent._dry_run = True
+    agent._transcript = MagicMock()
+    agent.spotify = None
+    agent.mic = FakeMic()
+    agent._callin_active = False
+    agent._transition_lock = asyncio.Lock()
+    agent._transition_request_id = 0
+    agent._producer_tasks = set()
+    agent._preview_cache = {}
+    agent._preview_tasks = {}
+    agent.session_memory = MagicMock()
+    agent._generation_task = None
     return agent
 
 

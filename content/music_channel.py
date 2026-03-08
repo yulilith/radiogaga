@@ -39,6 +39,7 @@ class MusicChannel(BaseChannel):
                 logger.warning("music.spotify_resume_failed: %s", e)
 
     async def on_deactivate(self):
+        self._cancelled = True
         if self.spotify:
             try:
                 await self.spotify.pause()
@@ -73,6 +74,7 @@ class MusicChannel(BaseChannel):
             return []
 
         if banter.strip():
+            self.history.append({"role": "assistant", "content": banter.strip()})
             return [ContentChunk(text=banter.strip(), voice_id=voice_id, pause_after=0.5)]
         return []
 
@@ -127,75 +129,114 @@ INSTRUCTIONS:
         logger.info("Music stream_content started", extra={"subchannel": subchannel})
         voice_id = self.get_voice_id(subchannel)
 
-        # Build initial set list
-        await self._build_set_list(subchannel)
+        # Build set list in background — don't block DJ banter
+        set_list_task = asyncio.create_task(self._build_set_list(subchannel))
 
-        while not self._cancelled:
-            # 1. Play DJ intro/banter
-            ctx = await self.context.get_context()
-            system_prompt = self.get_system_prompt(subchannel, ctx)
+        try:
+            while not self._cancelled:
+                # 1. Play DJ intro/banter immediately (no waiting for set list)
+                ctx = await self.context.get_context()
+                system_prompt = self.get_system_prompt(subchannel, ctx)
 
-            messages = [
-                *self.history[-4:],
-                {"role": "user", "content": "Generate DJ banter between songs."},
-            ]
+                messages = [
+                    *self.history[-4:],
+                    {"role": "user", "content": "Generate DJ banter between songs."},
+                ]
 
-            model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
-            banter = ""
-            t0 = time.monotonic()
-            async with self.client.messages.stream(
-                model=model,
-                max_tokens=100,
-                temperature=0.9,
-                system=system_prompt,
-                messages=messages,
-            ) as stream:
-                async for text in stream.text_stream:
-                    if self._cancelled:
-                        return
-                    banter += text
-            duration_ms = (time.monotonic() - t0) * 1000
-            log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
-                         model=model, context="music_banter", response_len=len(banter))
+                model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+                banter = ""
+                t0 = time.monotonic()
+                async with self.client.messages.stream(
+                    model=model,
+                    max_tokens=100,
+                    temperature=0.9,
+                    system=system_prompt,
+                    messages=messages,
+                ) as stream:
+                    async for text in stream.text_stream:
+                        if self._cancelled:
+                            return
+                        banter += text
+                duration_ms = (time.monotonic() - t0) * 1000
+                log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
+                             model=model, context="music_banter", response_len=len(banter))
 
-            if banter.strip():
-                logger.debug("Music banter generated", extra={"banter_len": len(banter.strip())})
-                self.history.append({"role": "assistant", "content": banter.strip()})
-                yield ContentChunk(text=banter.strip(), voice_id=voice_id, pause_after=0.5)
+                if banter.strip():
+                    logger.debug("Music banter generated", extra={"banter_len": len(banter.strip())})
+                    self.history.append({"role": "assistant", "content": banter.strip()})
+                    banter_played = asyncio.Event()
+                    yield ContentChunk(text=banter.strip(), voice_id=voice_id, pause_after=0.5,
+                                       played_event=banter_played)
+                    # Wait for banter audio to be enqueued to player before starting music
+                    try:
+                        await asyncio.wait_for(banter_played.wait(), timeout=30.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("Timed out waiting for banter playback")
 
-            if self._cancelled:
-                return
+                if self._cancelled:
+                    return
 
-            # 2. Play a song
-            if self.spotify and self._set_list:
-                track = self._set_list.pop(0)
-                self._current_track = track
-                logger.info("playing track", extra={"track": track.get("name", "Unknown"), "artist": track.get("artist", "Unknown")})
-                try:
-                    await self.spotify.play_track(track["uri"])
-                    await self._wait_for_song_end()
-                    await self.spotify.pause()
-                except Exception as e:
-                    logger.error("Spotify playback error", exc_info=e, extra={"track": track.get("name", "Unknown")})
-                    await asyncio.sleep(5)
-            elif self.music_manager and self.music_manager.has_music():
-                logger.warning("using local music fallback", extra={"subchannel": subchannel})
-                genre = self._subchannel_to_genre(subchannel)
-                track_path = self.music_manager.get_track(genre)
-                if track_path:
-                    self._current_track = {"name": "Track", "artist": "Artist", "album": ""}
-                    yield ContentChunk(text="", voice_id=voice_id, play_music=track_path)
-                    await asyncio.sleep(15)
+                # Ensure set list is ready before playing a track
+                if set_list_task and not set_list_task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(set_list_task), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("Set list build timed out, continuing without tracks")
+                    except Exception as e:
+                        logger.warning("Set list build failed: %s", e)
+                    set_list_task = None
+
+                if self._cancelled:
+                    return
+
+                # 2. Play a song
+                if self.spotify and self._set_list:
+                    track = self._set_list.pop(0)
+                    self._current_track = track
+                    logger.info("playing track", extra={"track": track.get("name", "Unknown"), "artist": track.get("artist", "Unknown")})
+                    try:
+                        if self._cancelled:
+                            return
+                        await self.spotify.play_track(track["uri"])
+                        await self._wait_for_song_end()
+                        if not self._cancelled:
+                            await self.spotify.pause()
+                    except asyncio.CancelledError:
+                        # Ensure Spotify is paused if cancelled mid-playback
+                        try:
+                            await self.spotify.pause()
+                        except Exception:
+                            pass
+                        raise
+                    except Exception as e:
+                        logger.error("Spotify playback error", exc_info=e, extra={"track": track.get("name", "Unknown")})
+                        await asyncio.sleep(5)
+                elif self.music_manager and self.music_manager.has_music():
+                    logger.warning("using local music fallback", extra={"subchannel": subchannel})
+                    genre = self._subchannel_to_genre(subchannel)
+                    track_path = self.music_manager.get_track(genre)
+                    if track_path:
+                        self._current_track = {"name": "Track", "artist": "Artist", "album": ""}
+                        yield ContentChunk(text="", voice_id=voice_id, play_music=track_path)
+                        await asyncio.sleep(15)
+                    else:
+                        await asyncio.sleep(3)
                 else:
+                    logger.warning("no music source available, banter-only mode")
+                    self._current_track = None
                     await asyncio.sleep(3)
-            else:
-                logger.warning("no music source available, banter-only mode")
-                self._current_track = None
-                await asyncio.sleep(3)
 
-            # Refill set list if running low
-            if len(self._set_list) < 3:
-                await self._build_set_list(subchannel)
+                # Refill set list if running low
+                if len(self._set_list) < 3:
+                    set_list_task = asyncio.create_task(self._build_set_list(subchannel))
+        finally:
+            # Clean up background set list task on exit
+            if set_list_task and not set_list_task.done():
+                set_list_task.cancel()
+                try:
+                    await set_list_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     async def _build_set_list(self, subchannel: str):
         """Build a set list from Spotify based on the subchannel mode."""

@@ -56,7 +56,7 @@ class PreviewEntry:
 class RadioAgent:
     """Main controller — wires together hardware, audio, content, and networking."""
 
-    def __init__(self, channel: str = "news"):
+    def __init__(self, channel: str = "music"):
         self.agent_id = str(uuid.uuid4())[:8]
         self._loop: asyncio.AbstractEventLoop | None = None
         self._channel_tasks: dict[str, asyncio.Task] = {}
@@ -137,7 +137,7 @@ class RadioAgent:
         # Content channels — each solo channel gets its slot persona
         self.channels = {
             "dailybrief": DailyBriefChannel(self.context, CONFIG, persona=self._persona_slots[0]),
-            "talkshow": TalkShowChannel(self.context, CONFIG, exa_service=self.exa, personas=list(self._persona_slots)),
+            "talkshow": TalkShowChannel(self.context, CONFIG, exa_service=self.exa),
             "music": MusicChannel(self.context, CONFIG, self.spotify, self.music_manager, persona=self._persona_slots[1]),
             "memos": MemosChannel(self.context, CONFIG, persona=self._persona_slots[2]),
         }
@@ -354,7 +354,7 @@ class RadioAgent:
         return generation, previous_task
 
     async def _pause_dj_if_needed(self, previous_channel: str):
-        if previous_channel != "dj" or not self.spotify:
+        if previous_channel not in ("dj", "music") or not self.spotify:
             return
 
         try:
@@ -595,9 +595,9 @@ class RadioAgent:
                 logger.info("audio_consumer.playing_warm_cache",
                             extra={"channel": self.active_channel, "segments": len(warm)})
                 self.player.stop_static()
-            gid = self.player._gen_id
+            gid = self.player.current_generation
             for audio in warm:
-                await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
+                await asyncio.to_thread(self.player.enqueue_mp3, audio, generation=gid)
 
             source = channel._output_queue
             tts_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
@@ -614,8 +614,14 @@ class RadioAgent:
                         self.player.clear_buffer()
                         continue
                     if chunk.text:
-                        audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
-                        await tts_queue.put((audio, chunk))
+                        try:
+                            audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
+                            await tts_queue.put((audio, chunk))
+                        except Exception as e:
+                            logger.error("TTS synthesis failed, skipping chunk: %s", e,
+                                         extra={"voice_id": chunk.voice_id, "text_len": len(chunk.text)})
+                            # Skip this chunk but keep the pipeline alive
+                            await tts_queue.put((None, chunk))
                     else:
                         await tts_queue.put((None, chunk))
 
@@ -628,8 +634,10 @@ class RadioAgent:
                         if not static_stopped:
                             self.player.stop_static()
                             static_stopped = True
-                        gid = self.player._gen_id
-                        await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
+                        gid = self.player.current_generation
+                        await asyncio.to_thread(self.player.enqueue_mp3, audio, generation=gid)
+                    if chunk.played_event is not None:
+                        chunk.played_event.set()
                     if chunk.pause_after > 0:
                         await asyncio.sleep(chunk.pause_after)
                     if chunk.play_music and os.path.exists(chunk.play_music):
@@ -713,6 +721,15 @@ class RadioAgent:
 
         if old_id in self.ON_DEMAND_CHANNELS:
             await self._stop_on_demand_channel(old_id)
+
+        # After stopping the task, re-pause Spotify to catch any in-flight
+        # play_track calls that completed in a thread after cancellation.
+        if old_id == "music" and self.spotify:
+            await asyncio.sleep(0.3)
+            try:
+                await self.spotify.pause()
+            except Exception:
+                pass
 
         old_ch.set_on_air(False)
 
@@ -858,7 +875,14 @@ class RadioAgent:
             self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
 
     async def _handle_nfc(self):
-        """Read NFC tag and integrate its contents."""
+        """Read NFC tag and integrate its contents.
+
+        If the tag text matches an agent summoning pattern (e.g. "agent:1"),
+        the corresponding persona joins the live talk show conversation.
+        Otherwise the tag content is saved to memos as before.
+        """
+        from content.personas import NFC_AGENT_MAP
+
         if not self.nfc.available:
             logger.info("NFC reader not available")
             return
@@ -870,13 +894,32 @@ class RadioAgent:
             return
 
         logger.info("NFC tag content: %s", text[:100])
+        tag_key = text.strip().lower()
 
-        # Add to memos channel
+        # --- Agent summoning via NFC ---
+        if tag_key in NFC_AGENT_MAP:
+            persona_id = NFC_AGENT_MAP[tag_key]
+            logger.info("NFC agent summon: %s -> %s", tag_key, persona_id)
+
+            talkshow = self.channels.get("talkshow")
+            if talkshow and hasattr(talkshow, "join_agent"):
+                chunk = talkshow.join_agent(persona_id)
+                if chunk:
+                    if self._dry_run:
+                        self._transcript.log_chunk("talkshow", self.active_subchannel,
+                                                   chunk.voice_id, "nfc_agent_join", chunk.text)
+                        logger.info("[DRY-RUN] nfc agent join: %s", chunk.text[:120])
+                    else:
+                        audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
+                        gid = self.player.current_generation
+                        await asyncio.to_thread(self.player.enqueue_mp3, audio, generation=gid)
+            return
+
+        # --- Default: save to memos ---
         memos = self.channels.get("memos")
         if hasattr(memos, "add_memo_from_nfc"):
             memos.add_memo_from_nfc(text)
 
-        # Announce via TTS
         voice_id = self.channels["memos"].get_voice_id("")
         announcement = f"NFC tag received. Content saved to memos: {text[:80]}"
         if self._dry_run:
@@ -884,8 +927,8 @@ class RadioAgent:
             logger.info("[DRY-RUN] nfc: %s", announcement[:120])
         else:
             audio = await self.tts.synthesize(announcement, voice_id)
-            gid = self.player._gen_id
-            await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
+            gid = self.player.current_generation
+            await asyncio.to_thread(self.player.enqueue_mp3, audio, generation=gid)
 
     def _start_always_on_channels(self):
         """Start background tasks for always-on channels (talkshow, dailybrief)."""
@@ -1121,8 +1164,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-c", "--channel",
         choices=list(CHANNELS.keys()),
-        default="dailybrief",
-        help="channel to start on (default: dailybrief)",
+        default="music",
+        help="channel to start on (default: music)",
     )
     return parser.parse_args()
 

@@ -43,7 +43,7 @@ class InputController:
         self.callback = callback
         self.dial_position = 50
         self.volume = 70
-        self.active_channel = "dailybrief"
+        self.active_channel = "music"
         self._callin_active = False
         self._use_gpio = False
         self._adc = None
@@ -66,7 +66,7 @@ class InputController:
         pins = self.config["PINS"]
 
         # Channel buttons (4)
-        for pin_name in ["btn_dailybrief", "btn_talkshow", "btn_music", "btn_memos"]:
+        for pin_name in ["btn_music", "btn_talkshow", "btn_dailybrief", "btn_memos"]:
             pin = pins[pin_name]
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             GPIO.add_event_detect(pin, GPIO.FALLING,
@@ -186,7 +186,7 @@ class InputController:
         logger.info("Controls: 1-4=channels, a/d=tune, w/s=volume, c=call-in, n=nfc, 7/8/9=swap slot 0/1/2, q=quit")
 
         loop = asyncio.get_event_loop()
-        channel_keys = {"1": "dailybrief", "2": "talkshow", "3": "music", "4": "memos"}
+        channel_keys = {"1": "music", "2": "talkshow", "3": "dailybrief", "4": "memos"}
 
         while True:
             key = await loop.run_in_executor(None, self._get_key)

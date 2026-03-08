@@ -24,12 +24,12 @@ CONFIG = {
     "DEBUG_LLM_WITHOUT_VOICE": os.getenv("DEBUG_LLM_WITHOUT_VOICE", "false").lower() == "true",
 
     # LLM Settings
-    "LLM_MODEL": "claude-haiku-4-5-20251001",
+    "LLM_MODEL": "claude-opus-4-6",
     "LLM_MAX_TOKENS": 300,
     "LLM_TEMPERATURE": 0.85,
 
     # TTS Settings
-    "TTS_MODEL": "eleven_flash_v2_5",
+    "TTS_MODEL": "eleven_v3",
     "TTS_OUTPUT_FORMAT": "mp3_22050_32",
     "TTS_SPEED": float(os.getenv("RADIO_ELEVENLABS_SPEED", "1.1")),
     "TTS_LATENCY_OPTIMIZATION": 3,
