@@ -20,17 +20,7 @@ class AudioPlayer:
 
     def __init__(self):
         self.pa = pyaudio.PyAudio()
-        device_index = self._find_output_device()
-        open_kwargs = dict(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.SAMPLE_RATE,
-            output=True,
-            frames_per_buffer=self.CHUNK_SIZE,
-        )
-        if device_index is not None:
-            open_kwargs["output_device_index"] = device_index
-        self.stream = self.pa.open(**open_kwargs)
+        self.stream = self._open_output_stream()
         self.audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self._playing = False
         self._play_thread: threading.Thread | None = None
@@ -38,21 +28,48 @@ class AudioPlayer:
         self._muted = False
         self._last_underrun_log: float = 0.0  # rate-limit underrun warnings
 
-    def _find_output_device(self) -> int | None:
-        """Find the first available output device, preferring non-HDMI."""
-        hdmi_indices = []
+    def _open_output_stream(self):
+        """Try each output device until one opens successfully."""
+        non_hdmi = []
+        hdmi = []
         for i in range(self.pa.get_device_count()):
             info = self.pa.get_device_info_by_index(i)
             if info.get("maxOutputChannels", 0) > 0:
                 name = info.get("name", "").lower()
-                logger.info("Found output device %d: %s", i, info.get("name"))
+                logger.info("Found output device %d: %s (rate=%.0f, channels=%d)",
+                            i, info.get("name"), info.get("defaultSampleRate", 0),
+                            info.get("maxOutputChannels", 0))
                 if "hdmi" in name:
-                    hdmi_indices.append(i)
+                    hdmi.append(i)
                 else:
-                    return i  # Prefer non-HDMI (USB audio, headphone jack, etc.)
-        if hdmi_indices:
-            return hdmi_indices[0]  # Fall back to first HDMI
-        return None
+                    non_hdmi.append(i)
+
+        # Try non-HDMI first, then HDMI, then default (no index)
+        candidates = non_hdmi + hdmi + [None]
+        for device_index in candidates:
+            for rate in (self.SAMPLE_RATE, 44100, 48000):
+                try:
+                    kwargs = dict(
+                        format=self.FORMAT,
+                        channels=self.CHANNELS,
+                        rate=rate,
+                        output=True,
+                        frames_per_buffer=self.CHUNK_SIZE,
+                    )
+                    if device_index is not None:
+                        kwargs["output_device_index"] = device_index
+                    stream = self.pa.open(**kwargs)
+                    if rate != self.SAMPLE_RATE:
+                        self.SAMPLE_RATE = rate
+                    logger.info("Opened output device %s at %d Hz", device_index, rate)
+                    return stream
+                except OSError as e:
+                    logger.debug("Device %s at %d Hz failed: %s", device_index, rate, e)
+
+        raise RuntimeError(
+            "No audio output device could be opened. "
+            "Plug in a USB audio adapter, HDMI monitor with speakers, or enable the headphone jack."
+        )
 
     @property
     def volume(self) -> float:
