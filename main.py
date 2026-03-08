@@ -217,10 +217,6 @@ class RadioAgent:
 
         elif event.event_type == "callin_start":
             self.leds.set_callin(True)
-            ch = self.channels[self.active_channel]
-            # #region agent log
-            import json as _j, time as _t; open("/Users/marco@sierra.ai/playground/radiogaga/.cursor/debug-9dd316.log","a").write(_j.dumps({"sessionId":"9dd316","hypothesisId":"FLUSH","location":"main.py:callin_start_before","message":"queue state BEFORE flush","data":{"output_queue_size": ch._output_queue.qsize(),"warm_audio_len": len(ch._warm_audio),"warm_queue_size": ch._warm_queue.qsize(),"player_buffer": self.player.audio_queue.qsize() if self.player else 0},"timestamp":int(_t.time()*1000)})+"\n")
-            # #endregion
             if self._audio_consumer_task:
                 self._audio_consumer_task.cancel()
                 try:
@@ -232,10 +228,7 @@ class RadioAgent:
                 self.player.stop_static()
                 self.player.interrupt()
             self._drain_queue(self.active_channel)
-            ch._warm_audio.clear()
-            # #region agent log
-            open("/Users/marco@sierra.ai/playground/radiogaga/.cursor/debug-9dd316.log","a").write(_j.dumps({"sessionId":"9dd316","hypothesisId":"FLUSH","location":"main.py:callin_start_after","message":"queue state AFTER flush","data":{"output_queue_size": ch._output_queue.qsize(),"warm_audio_len": len(ch._warm_audio),"warm_queue_size": ch._warm_queue.qsize(),"player_buffer": self.player.audio_queue.qsize() if self.player else 0},"timestamp":int(_t.time()*1000)})+"\n")
-            # #endregion
+            self.channels[self.active_channel]._warm_audio.clear()
             self.mic.start_recording()
 
         elif event.event_type == "callin_stop":
@@ -489,9 +482,6 @@ class RadioAgent:
         channel.interrupt(callin=transcript)
         self._drain_queue(self.active_channel)
         channel._warm_audio.clear()
-        # #region agent log
-        import json as _j, time as _t; open("/Users/marco@sierra.ai/playground/radiogaga/.cursor/debug-9dd316.log","a").write(_j.dumps({"sessionId":"9dd316","hypothesisId":"FLUSH","location":"main.py:callin_stop_before_consumer","message":"state before new consumer","data":{"output_queue_size": channel._output_queue.qsize(),"warm_audio_len": len(channel._warm_audio),"player_buffer": self.player.audio_queue.qsize() if self.player else 0},"timestamp":int(_t.time()*1000)})+"\n")
-        # #endregion
         self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
 
     async def _handle_swap_slot(self, slot_index: int):

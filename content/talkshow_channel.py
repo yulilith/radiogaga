@@ -115,9 +115,6 @@ class TalkShowAgent:
         """
         system_prompt = self._build_system_prompt(conversation, topic, turn_kind, other_names)
         user_prompt = self._build_user_prompt(conversation, topic, turn_kind, other_names)
-        # #region agent log
-        import json as _j, time as _t; open("/Users/marco@sierra.ai/playground/radiogaga/.cursor/debug-9dd316.log","a").write(_j.dumps({"sessionId":"9dd316","hypothesisId":"H11,H12","location":"talkshow_channel.py:speaking_turn","message":"speaking turn prompt","data":{"speaker": self.persona.name,"turn_kind": turn_kind,"user_prompt": user_prompt[:600],"topic": topic["text"][:100],"transcript_len": len(conversation.transcript)},"timestamp":int(_t.time()*1000)})+"\n")
-        # #endregion
         model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
         temperature = self.config.get("LLM_TEMPERATURE", 0.9)
 
@@ -333,7 +330,9 @@ class TalkShowAgent:
             "CONVERSATION RULES:",
             "- Sound opinionated, quick, and radio-friendly",
             "- Do not use bullet points, markdown, or stage directions",
-            "- Keep responses clear, concise, brief. Encourage others to respond. Don't be verbose be direct and concise.",
+            "- Keep responses quick, clear, concise, brief."
+            "- Encourage others to respond. Don't be verbose be direct and concise.",
+            "- We want a conversation with many short turns, one after another."
             "",
             "TURN-TAKING RULES:",
             "- ALWAYS respond to the LAST speaker in the transcript — do not skip over them or repeat old points",
@@ -525,13 +524,8 @@ CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
             "participants": [a.name for a in self.agents],
         })
 
-        segment_num = 0
         while not self._cancelled:
-            segment_num += 1
             ctx = await self.context.get_context()
-            # #region agent log
-            import json as _j, time as _t; open("/Users/marco@sierra.ai/playground/radiogaga/.cursor/debug-9dd316.log","a").write(_j.dumps({"sessionId":"9dd316","hypothesisId":"H11","location":"talkshow_channel.py:segment_start","message":"new segment","data":{"segment_num": segment_num,"transcript_count": len(self.conversation.transcript),"transcript_preview": self.conversation.format_recent(4),"had_callers": self.conversation.had_callers},"timestamp":int(_t.time()*1000)})+"\n")
-            # #endregion
             if self._last_callin_transcript:
                 topic = {
                     "source": "caller",
