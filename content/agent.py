@@ -31,6 +31,15 @@ class BaseChannel(ABC):
         self.max_history = config.get("HISTORY_WINDOW", 8)
         self._cancelled = False
 
+        self._output_queue: asyncio.Queue[ContentChunk] = asyncio.Queue(maxsize=2)
+        self._interrupted = asyncio.Event()
+        self._pending_callin: str | None = None
+        self._subchannel: str = ""
+        self._on_air = False
+
+        self._warm_queue: asyncio.Queue[ContentChunk] = asyncio.Queue(maxsize=1)
+        self._warm_audio: list[bytes] = []
+
     @abstractmethod
     def channel_name(self) -> str:
         """Human-readable channel name."""
@@ -123,6 +132,97 @@ class BaseChannel(ABC):
             if not self._cancelled:
                 await asyncio.sleep(0.5)
 
+    async def run_background(self):
+        """Run content generation forever in background. One task per channel."""
+        logger.info("channel.background_started", extra={"channel": self.channel_name()})
+        while True:
+            self._interrupted.clear()
+            self._cancelled = False
+            try:
+                if self._pending_callin:
+                    transcript = self._pending_callin
+                    self._pending_callin = None
+                    logger.info("channel.callin_injected", extra={
+                        "channel": self.channel_name(),
+                        "transcript_preview": transcript[:60],
+                    })
+                    async for chunk in self.handle_callin(transcript):
+                        if self._interrupted.is_set():
+                            break
+                        if self._on_air:
+                            await self._output_queue.put(chunk)
+
+                gen_task = asyncio.create_task(self._run_generation())
+                interrupt_task = asyncio.create_task(self._interrupted.wait())
+
+                done, pending = await asyncio.wait(
+                    [gen_task, interrupt_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                for t in pending:
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                if gen_task in done and not self._interrupted.is_set():
+                    await asyncio.sleep(0.5)
+
+            except asyncio.CancelledError:
+                logger.info("channel.background_stopped", extra={"channel": self.channel_name()})
+                break
+            except Exception as e:
+                logger.error("channel.background_error: %s", e, exc_info=True,
+                             extra={"channel": self.channel_name()})
+                await asyncio.sleep(1)
+
+    async def _run_generation(self):
+        """Single generation pass -- iterate stream_content and route chunks."""
+        async for chunk in self.stream_content(self._subchannel):
+            if self._on_air:
+                await self._output_queue.put(chunk)
+            elif chunk.text:
+                while not self._warm_queue.empty():
+                    try:
+                        self._warm_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                await self._warm_queue.put(chunk)
+
+    def interrupt(self, callin: str | None = None):
+        """Interrupt current generation immediately."""
+        logger.info("channel.background_interrupted", extra={
+            "channel": self.channel_name(),
+            "has_callin": callin is not None,
+        })
+        if callin:
+            self._pending_callin = callin
+        self._cancelled = True
+        self._interrupted.set()
+
+    def set_on_air(self, on_air: bool):
+        logger.info("channel.on_air_changed", extra={
+            "channel": self.channel_name(), "on_air": on_air,
+        })
+        self._on_air = on_air
+
+    def set_subchannel(self, subchannel: str):
+        self._subchannel = subchannel
+
+    async def on_activate(self):
+        """Called when the listener switches TO this channel. Override for custom behavior."""
+        pass
+
+    async def on_deactivate(self):
+        """Called when the listener switches AWAY from this channel. Override for custom behavior."""
+        pass
+
+    async def generate_warm_preview(self) -> list[ContentChunk]:
+        """Generate a preview chunk for the warm cache. Override in on-demand channels."""
+        return []
+
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
         """Handle a call-in from a listener. Override in channels that support it."""
         logger.info("callin received (default handler)", extra={"channel": self.channel_name(), "transcript_len": len(transcript)})
@@ -132,12 +232,11 @@ class BaseChannel(ABC):
         )
 
     def cancel(self):
-        """Cancel ongoing generation (called when switching channels)."""
-        logger.debug("channel cancelled", extra={"channel": self.channel_name()})
-        self._cancelled = True
+        """Cancel ongoing generation. Prefer interrupt() for the new architecture."""
+        self.interrupt()
 
     def reset(self):
-        """Reset cancellation flag (called when switching back to this channel)."""
+        """Reset cancellation flag. History is preserved across switches."""
         logger.info("channel reset", extra={"channel": self.channel_name()})
         self._cancelled = False
 

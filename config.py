@@ -39,8 +39,9 @@ CONFIG = {
     "SAMPLE_RATE": 22050,
     "AUDIO_CHANNELS": 1,
     "BUFFER_SIZE": 1024,
+    "RADIO_FILTER_STRENGTH": float(os.getenv("RADIO_FILTER_STRENGTH", "0.7")),
 
-    # Voice IDs (ElevenLabs pre-made voices)
+    # Voice IDs — sourced from content/personas.py, can be overridden at runtime
     "VOICES": {
         "news_anchor": "pNInz6obpgDQGcFmaJgB",       # Adam — Daily Brief
         "field_reporter": "EXAVITQu4vr4xnSDxMaL",     # Bella — Weather/Traffic
@@ -48,6 +49,7 @@ CONFIG = {
         "talk_cohost": "XB0fDUnXU5powFXDhCwa",        # Charlotte — Talk co-host
         "dj": "iP95p4xoKVk53GoZ742B",                 # Chris — Music channel
         "memo_host": "pNInz6obpgDQGcFmaJgB",          # Adam — Memos readback
+        "sports_commentator": "TX3LPaxmHKxFdv7VOQHJ", # Liam — Sports
     },
 
     # ─────────────────────────────────────────────────────────────

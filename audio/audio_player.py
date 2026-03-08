@@ -1,5 +1,7 @@
 import io
 import queue
+import random
+import struct
 import time
 import threading
 import pyaudio
@@ -11,22 +13,30 @@ logger = get_logger(__name__)
 
 
 class AudioPlayer:
-    """Manages audio output with buffering, volume control, and channel switching."""
+    """Manages audio output with buffering, volume control, radio static, and voice filter."""
 
     CHUNK_SIZE = 1024
     SAMPLE_RATE = 22050
     CHANNELS = 1
     FORMAT = pyaudio.paInt16
 
-    def __init__(self):
+    def __init__(self, radio_filter_strength: float = 0.7):
         self.pa = pyaudio.PyAudio()
         self.stream = self._open_output_stream()
         self.audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self._playing = False
         self._play_thread: threading.Thread | None = None
-        self._volume = 0.7  # 0.0 to 1.0
+        self._volume = 0.7
         self._muted = False
-        self._last_underrun_log: float = 0.0  # rate-limit underrun warnings
+        self._last_underrun_log: float = 0.0
+        self._gen_id = 0
+
+        self._static_mode = False
+        self._static_volume = 0.15
+        self._radio_filter_strength = radio_filter_strength
+        self._filtered_static_chunks: list[bytes] = []
+        self._filtered_static_idx = 0
+        self._build_filtered_static_pool()
 
     def _open_output_stream(self):
         """Try each output device until one opens successfully."""
@@ -91,6 +101,97 @@ class AudioPlayer:
         self._muted = not self._muted
         logger.info("Mute toggled", extra={"muted": self._muted})
 
+    # ------------------------------------------------------------------
+    # Static noise
+    # ------------------------------------------------------------------
+
+    def _generate_static(self, num_samples: int | None = None) -> bytes:
+        n = num_samples or self.CHUNK_SIZE
+        scale = self._static_volume * 32767
+        samples = [int(random.uniform(-scale, scale)) for _ in range(n)]
+        return struct.pack(f"<{n}h", *samples)
+
+    def _generate_static_segment(self, duration_ms: int, volume_db: float = -35) -> AudioSegment:
+        num_samples = int(self.SAMPLE_RATE * duration_ms / 1000)
+        raw = self._generate_static(num_samples)
+        seg = AudioSegment(
+            data=raw,
+            sample_width=2,
+            frame_rate=self.SAMPLE_RATE,
+            channels=self.CHANNELS,
+        )
+        if seg.dBFS != float("-inf"):
+            seg = seg + (volume_db - seg.dBFS)
+        return seg
+
+    def _build_filtered_static_pool(self, pool_size: int = 16):
+        """Pre-generate a pool of band-pass filtered static chunks.
+
+        Each chunk is exactly CHUNK_SIZE samples (2048 bytes) so it matches
+        the playback frame size with no gaps.
+        """
+        pool: list[bytes] = []
+        for _ in range(pool_size):
+            raw = self._generate_static(self.CHUNK_SIZE)
+            seg = AudioSegment(
+                data=raw,
+                sample_width=2,
+                frame_rate=self.SAMPLE_RATE,
+                channels=self.CHANNELS,
+            )
+            if seg.dBFS != float("-inf"):
+                seg = seg + (-20 - seg.dBFS)
+            if self._radio_filter_strength > 0:
+                s = self._radio_filter_strength
+                seg = seg.high_pass_filter(int(20 + 280 * s))
+                seg = seg.low_pass_filter(int(20000 - 17000 * s))
+            pool.append(seg.raw_data[:self.CHUNK_SIZE * 2])
+        self._filtered_static_chunks = pool
+        self._filtered_static_idx = 0
+
+    def _next_static_chunk(self) -> bytes:
+        """Return the next pre-filtered static chunk, cycling through the pool."""
+        if not self._filtered_static_chunks:
+            return self._generate_static()
+        chunk = self._filtered_static_chunks[self._filtered_static_idx]
+        self._filtered_static_idx = (self._filtered_static_idx + 1) % len(self._filtered_static_chunks)
+        return chunk
+
+    def start_static(self):
+        self._static_mode = True
+
+    def stop_static(self):
+        self._static_mode = False
+
+    # ------------------------------------------------------------------
+    # Radio voice filter
+    # ------------------------------------------------------------------
+
+    def _apply_radio_filter(self, audio: AudioSegment) -> AudioSegment:
+        s = self._radio_filter_strength
+        if s <= 0:
+            return audio
+
+        low_cut = int(20 + 280 * s)
+        high_cut = int(20000 - 17000 * s)
+
+        filtered = audio.high_pass_filter(low_cut)
+        filtered = filtered.low_pass_filter(high_cut)
+        filtered = filtered + (3 * s)
+
+        static_db = -45 + (15 * s)
+        static_layer = self._generate_static_segment(
+            duration_ms=len(filtered),
+            volume_db=static_db,
+        )
+        filtered = filtered.overlay(static_layer)
+
+        return filtered
+
+    # ------------------------------------------------------------------
+    # Playback
+    # ------------------------------------------------------------------
+
     def start(self):
         """Start the playback thread."""
         logger.info("Audio player starting")
@@ -101,38 +202,44 @@ class AudioPlayer:
     def _playback_loop(self):
         while self._playing:
             try:
-                audio_data = self.audio_queue.get(timeout=0.1)
+                if self._static_mode:
+                    audio_data = self.audio_queue.get_nowait()
+                else:
+                    audio_data = self.audio_queue.get(timeout=0.1)
                 if self._muted:
-                    # Play silence when muted
                     silence = b"\x00" * len(audio_data)
                     self.stream.write(silence)
                 else:
-                    # Apply volume
                     adjusted = self._apply_volume(audio_data)
                     self.stream.write(adjusted)
             except queue.Empty:
-                # Buffer underrun -- play silence, log at most once per 5 seconds
-                now = time.monotonic()
-                if now - self._last_underrun_log >= 5.0:
-                    logger.warning("Buffer underrun, playing silence")
-                    self._last_underrun_log = now
-                silence = b"\x00" * self.CHUNK_SIZE * 2
-                self.stream.write(silence)
+                if self._static_mode and not self._muted:
+                    static_chunk = self._next_static_chunk()
+                    adjusted = self._apply_volume(static_chunk)
+                    self.stream.write(adjusted)
+                else:
+                    now = time.monotonic()
+                    if now - self._last_underrun_log >= 5.0:
+                        logger.warning("Buffer underrun, playing silence")
+                        self._last_underrun_log = now
+                    silence = b"\x00" * self.CHUNK_SIZE * 2
+                    self.stream.write(silence)
 
     def _apply_volume(self, data: bytes) -> bytes:
         """Scale PCM audio data by volume level."""
         if self._volume >= 0.99:
             return data
-
-        import struct
         samples = struct.unpack(f"<{len(data) // 2}h", data)
         scaled = [int(s * self._volume) for s in samples]
-        # Clamp to int16 range
         scaled = [max(-32768, min(32767, s)) for s in scaled]
         return struct.pack(f"<{len(scaled)}h", *scaled)
 
-    def enqueue_mp3(self, mp3_bytes: bytes):
-        """Convert MP3 bytes to PCM and add to playback queue."""
+    def enqueue_mp3(self, mp3_bytes: bytes, gen_id: int | None = None):
+        """Convert MP3 bytes to PCM, apply radio filter, and add to playback queue.
+
+        If gen_id is provided, enqueuing stops immediately when
+        player.interrupt() is called (gen_id goes stale).
+        """
         if not mp3_bytes or len(mp3_bytes) < 4:
             logger.error("Received empty or too-small MP3 data, skipping")
             return
@@ -142,18 +249,25 @@ class AudioPlayer:
             logger.error("Failed to decode MP3 (%d bytes): %s", len(mp3_bytes), e)
             return
         audio = audio.set_frame_rate(self.SAMPLE_RATE).set_channels(self.CHANNELS)
+        audio = self._apply_radio_filter(audio)
         raw_data = audio.raw_data
 
         chunk_count = 0
         for i in range(0, len(raw_data), self.CHUNK_SIZE * 2):
+            if gen_id is not None and gen_id != self._gen_id:
+                logger.debug("enqueue_mp3 interrupted", extra={"enqueued": chunk_count})
+                return
             chunk = raw_data[i:i + self.CHUNK_SIZE * 2]
-            try:
-                self.audio_queue.put(chunk, timeout=5.0)
-                chunk_count += 1
-            except queue.Full:
-                logger.warning("Audio queue full, dropping remaining chunks",
-                               extra={"enqueued": chunk_count})
-                break
+            while True:
+                if gen_id is not None and gen_id != self._gen_id:
+                    logger.debug("enqueue_mp3 interrupted", extra={"enqueued": chunk_count})
+                    return
+                try:
+                    self.audio_queue.put(chunk, timeout=0.05)
+                    chunk_count += 1
+                    break
+                except queue.Full:
+                    continue
 
         logger.debug("MP3 enqueued", extra={
             "input_bytes": len(mp3_bytes), "chunks": chunk_count,
@@ -172,6 +286,11 @@ class AudioPlayer:
             except queue.Full:
                 break
 
+    def interrupt(self):
+        """Immediately stop current audio and flush the buffer."""
+        self._gen_id += 1
+        self.clear_buffer()
+
     def clear_buffer(self):
         """Flush the audio queue (for channel switching)."""
         discarded = 0
@@ -181,7 +300,7 @@ class AudioPlayer:
                 discarded += 1
             except queue.Empty:
                 break
-        logger.debug("Buffer cleared", extra={"chunks_discarded": discarded})
+        logger.debug("audio.buffer_cleared", extra={"chunks_discarded": discarded})
 
     def buffer_level(self) -> int:
         """Return current number of chunks in buffer."""
