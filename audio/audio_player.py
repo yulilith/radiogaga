@@ -43,7 +43,7 @@ class AudioPlayer:
         self._generation = 0
 
         self._static_mode = False
-        self._static_volume = 0.15
+        self._static_volume = 0.10  # white noise amplitude (was 0.15)
         self._radio_filter_strength = radio_filter_strength
         self._filtered_static_chunks: list[bytes] = []
         self._filtered_static_idx = 0

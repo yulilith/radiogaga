@@ -202,9 +202,9 @@ class WozDemo:
             self.switch_channel(event.channel)
         elif event.event_type == "dial_change":
             # Treat dial movement as channel switching
-            if event.dial_position < 33:
+            if event.dial_position < -5:
                 self.switch_channel("talkshow")
-            elif event.dial_position < 66:
+            elif event.dial_position < 5:
                 self.switch_channel("music")
             else:
                 self.switch_channel("dailybrief")
