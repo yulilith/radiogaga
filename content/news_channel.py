@@ -13,11 +13,6 @@ class NewsChannel(BaseChannel):
     def channel_name(self) -> str:
         return "News & Weather"
 
-    def get_voice_id(self, subchannel: str) -> str:
-        if subchannel == "weather":
-            return self.config["VOICES"].get("field_reporter", "EXAVITQu4vr4xnSDxMaL")
-        return self.config["VOICES"].get("news_anchor", "pNInz6obpgDQGcFmaJgB")
-
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         logger.info("generating news segment", extra={"subchannel": subchannel})
         headlines = context.get("headlines", [])

@@ -19,8 +19,8 @@ class MemosChannel(BaseChannel):
     so the experience feels app-like.
     """
 
-    def __init__(self, context_provider, config: dict):
-        super().__init__(context_provider, config)
+    def __init__(self, context_provider, config: dict, persona=None):
+        super().__init__(context_provider, config, persona=persona)
         MEMOS_DIR.mkdir(parents=True, exist_ok=True)
         self._memos: list[dict] = self._load_memos()
 
@@ -44,18 +44,17 @@ class MemosChannel(BaseChannel):
             text = f"Welcome back! You have {count} memos saved. Let me catch you up."
         return [ContentChunk(text=text, voice_id=voice_id, pause_after=0.5)]
 
-    def get_voice_id(self, subchannel: str) -> str:
-        return self.config["VOICES"].get("memo_host", "pNInz6obpgDQGcFmaJgB")
-
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         memo_texts = [m["text"] for m in self._memos[-10:]]
         memo_list = "\n".join(f"- [{m.get('timestamp', '?')}] {m['text']}" for m in self._memos[-10:])
 
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: Memos
-VOICE STYLE: Warm, personal assistant tone. Like a thoughtful friend reading your notes back.
+YOUR NAME: {self.persona.name if self.persona else 'Memo Host'}
+YOUR PERSONALITY: {self.persona.personality if self.persona else 'Warm, personal assistant tone. Like a thoughtful friend reading your notes back.'}
+Stay in character. Filter everything through your personality.
 
-You are the memo host on RadioAgent. Your job is to read back the listener's saved memos
+You are {self.persona.name if self.persona else 'the memo host'} on RadioAgent. Your job is to read back the listener's saved memos
 and provide helpful context, reminders, and gentle commentary.
 
 SAVED MEMOS (most recent):

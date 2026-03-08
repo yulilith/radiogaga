@@ -34,11 +34,6 @@ class DailyBriefChannel(BaseChannel):
         })
         logger.info("dailybrief.listener_tuned_away", extra={"timestamp": ts})
 
-    def get_voice_id(self, subchannel: str) -> str:
-        if subchannel in ("weather", "traffic"):
-            return self.config["VOICES"].get("field_reporter", "EXAVITQu4vr4xnSDxMaL")
-        return self.config["VOICES"].get("news_anchor", "pNInz6obpgDQGcFmaJgB")
-
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         logger.info("generating daily brief segment", extra={"subchannel": subchannel})
         headlines = context.get("headlines", [])
@@ -73,7 +68,9 @@ Reference major highways, intersections, and commute patterns typical for {conte
 
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: Daily Brief - {subchannel.title()}
-VOICE STYLE: Professional news anchor. Authoritative but warm.
+YOUR NAME: {self.persona.name if self.persona else 'News Anchor'}
+YOUR PERSONALITY: {self.persona.personality if self.persona else 'Professional news anchor. Authoritative but warm.'}
+Stay in character. Filter everything through your personality.
 
 {specific}
 
@@ -106,7 +103,7 @@ INSTRUCTIONS:
 A listener has called in with this question or comment:
 "{transcript}"
 
-Respond as a news anchor would to a caller. Acknowledge their point, provide context
+Respond in character as {self.persona.name if self.persona else 'the anchor'}. Acknowledge their point, provide context
 from the headlines you know about, and smoothly return to the broadcast.
 Keep response under 80 words.
 """

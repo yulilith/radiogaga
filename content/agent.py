@@ -6,7 +6,7 @@ from typing import AsyncGenerator
 
 import anthropic
 
-from log import get_logger, log_api_call
+from log import get_logger, log_api_call, TranscriptLogger
 
 logger = get_logger(__name__)
 
@@ -18,15 +18,18 @@ class ContentChunk:
     voice_id: str
     pause_after: float = 0.0       # Seconds of silence after this chunk
     play_music: str | None = None   # Path or URI to music to play after speech
+    flush: bool = False             # Signal to discard pre-fetched audio (agent-level interrupt)
 
 
 class BaseChannel(ABC):
     """Base class for all radio content channels."""
 
-    def __init__(self, context_provider, config: dict):
+    def __init__(self, context_provider, config: dict, persona=None):
         self.context = context_provider
         self.config = config
+        self.persona = persona
         self.client = anthropic.AsyncAnthropic(api_key=config["ANTHROPIC_API_KEY"])
+        self.transcript_logger = TranscriptLogger()
         self.history: list[dict] = []
         self.max_history = config.get("HISTORY_WINDOW", 8)
         self._cancelled = False
@@ -40,6 +43,19 @@ class BaseChannel(ABC):
         self._warm_queue: asyncio.Queue[ContentChunk] = asyncio.Queue(maxsize=1)
         self._warm_audio: list[bytes] = []
 
+    def set_persona(self, persona, previous_name: str | None = None):
+        """Hot-swap the active persona. Injects a handoff note if replacing someone."""
+        self.persona = persona
+        if previous_name:
+            self.history.append({
+                "role": "user",
+                "content": (
+                    f"[System: {previous_name} has left. You are {persona.name}, "
+                    "taking over. The transcript above is from your predecessor.]"
+                ),
+            })
+        self.interrupt()
+
     @abstractmethod
     def channel_name(self) -> str:
         """Human-readable channel name."""
@@ -50,10 +66,12 @@ class BaseChannel(ABC):
         """Build the system prompt for this channel + subchannel."""
         ...
 
-    @abstractmethod
     def get_voice_id(self, subchannel: str) -> str:
-        """Return the ElevenLabs voice ID for this channel."""
-        ...
+        """Return the ElevenLabs voice ID for this channel, derived from persona."""
+        if self.persona:
+            from content.personas import resolve_voice_id
+            return resolve_voice_id(self.persona.voice_key, self.config.get("VOICES"))
+        return self.config.get("VOICES", {}).get("dj", "iP95p4xoKVk53GoZ742B")
 
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         """Generate a continuous stream of content chunks."""
@@ -114,6 +132,15 @@ class BaseChannel(ABC):
             duration_ms = (time.monotonic() - t0) * 1000
             log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
                          model=model, response_len=len(full_response))
+
+            if full_response:
+                self.transcript_logger.log_llm_response(
+                    channel=self.channel_name(),
+                    subchannel=subchannel,
+                    text=full_response,
+                    model=model,
+                    duration_ms=duration_ms,
+                )
 
             # Yield any remaining text
             remaining = buffer.strip()
