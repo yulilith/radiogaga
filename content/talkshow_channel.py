@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, TYPE_CHECKING
 
-from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk
+from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk, PreparedPreview
 from content.personas import (
     Persona, PERSONA_REGISTRY, DEFAULT_SLOTS,
     resolve_voice_id,
@@ -468,6 +468,8 @@ SUBCHANNEL_ANGLES = {
 class TalkShowChannel(BaseChannel):
     """Three-person talk show with equal peer slots, concurrent listeners, and mid-turn interrupts."""
 
+    channel_id = "talkshow"
+
     def __init__(self, context_provider, config: dict,
                  exa_service: ExaSearchService | None = None,
                  personas: list[Persona] | None = None):
@@ -768,8 +770,8 @@ Recent transcript:
         valid = {"tech", "popculture", "philosophy", "comedy", "advice"}
         return subchannel if subchannel in valid else "tech"
 
-    def _base_prompt(self, context: dict) -> str:
-        return BASE_SYSTEM_PROMPT.format(
+    def _base_prompt(self, context: dict, subchannel: str | None = None) -> str:
+        prompt = BASE_SYSTEM_PROMPT.format(
             current_datetime=context.get("current_datetime", "Unknown"),
             day_of_week=context.get("day_of_week", "Unknown"),
             city=context.get("city", "Unknown"),
@@ -777,6 +779,9 @@ Recent transcript:
             weather=context.get("weather", "unavailable"),
             trending_topics=context.get("trending_topics", "No trending topics available"),
         )
+        if subchannel:
+            prompt += self.get_session_guidance(subchannel)
+        return prompt
 
     def _build_turn_order(self) -> list[tuple[int, str]]:
         """Build turn order for one segment, rotating the opener."""

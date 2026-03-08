@@ -1,8 +1,4 @@
-"""Integration tests for the channel switching flow.
-
-Tests the full _switch_channel path without real APIs by mocking
-the external services (Anthropic, ElevenLabs, Spotify, mDNS).
-"""
+"""Integration tests for the channel switching flow."""
 
 import asyncio
 import queue
@@ -10,7 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from content.agent import ContentChunk
+from content.agent import ContentChunk, PreparedPreview
+from hardware.input_controller import InputEvent
 
 
 @pytest.fixture
@@ -41,15 +38,18 @@ class FakeAudioPlayer:
         self._muted = False
         self._gen_id = 0
         self.started = False
+        self.current_generation = 0
         self.enqueued_chunks = []
+        self.play_file_calls = []
+        self.hard_stop_calls = []
 
     @property
     def volume(self):
         return self._volume
 
     @volume.setter
-    def volume(self, v):
-        self._volume = v
+    def volume(self, value):
+        self._volume = value
 
     @property
     def muted(self):
@@ -78,14 +78,32 @@ class FakeAudioPlayer:
             except queue.Empty:
                 break
 
+    def hard_stop(self, reason="interrupt"):
+        self.current_generation += 1
+        self.hard_stop_calls.append(reason)
+        self.clear_buffer()
+        return self.current_generation
+
     def buffer_level(self):
         return self.audio_queue.qsize()
 
-    def enqueue_mp3(self, mp3_bytes, gen_id=None):
-        self.enqueued_chunks.append(mp3_bytes)
+    def enqueue_mp3(self, mp3_bytes, *, generation=None, on_start=None):
+        target_generation = self.current_generation if generation is None else generation
+        if target_generation != self.current_generation:
+            return False
+        self.enqueued_chunks.append((mp3_bytes, target_generation))
+        if on_start:
+            on_start()
+        return True
 
-    def play_file(self, path):
-        pass
+    def play_file(self, path, *, generation=None, on_start=None):
+        target_generation = self.current_generation if generation is None else generation
+        if target_generation != self.current_generation:
+            return False
+        self.play_file_calls.append((path, target_generation))
+        if on_start:
+            on_start()
+        return True
 
     def stop(self):
         pass
@@ -94,7 +112,7 @@ class FakeAudioPlayer:
 class FakeChannel:
     """Minimal channel that produces chunks via the background queue pattern."""
 
-    def __init__(self, name):
+    def __init__(self, name, *, preview_text=None):
         self._name = name
         self._cancelled = False
         self._on_air = False
@@ -104,6 +122,10 @@ class FakeChannel:
         self._warm_audio: list[bytes] = []
         self._bg_task: asyncio.Task | None = None
         self.chunks_produced = 0
+        self.preview_calls = []
+        self.committed_previews = []
+        self.preview_text = preview_text or f"Preview from {name}"
+        self.session_memory = None
 
     def channel_name(self):
         return self._name
@@ -114,8 +136,18 @@ class FakeChannel:
     def set_subchannel(self, sub):
         self._subchannel = sub
 
+    def set_session_memory(self, session_memory):
+        self.session_memory = session_memory
+
     def interrupt(self, callin=None):
         self._cancelled = True
+
+    async def build_preview(self, subchannel):
+        self.preview_calls.append(subchannel)
+        return PreparedPreview(text=self.preview_text, voice_id="v1")
+
+    def commit_preview_playback(self, subchannel, preview):
+        self.committed_previews.append((subchannel, preview.text))
 
     def cancel(self):
         self.interrupt()
@@ -123,7 +155,7 @@ class FakeChannel:
     def reset(self):
         self._cancelled = False
 
-    def get_voice_id(self, sub):
+    def get_voice_id(self, subchannel):
         return "v1"
 
     async def on_activate(self):
@@ -149,15 +181,28 @@ class FakeChannel:
                 break
 
 
+class FakeMic:
+    def __init__(self):
+        self.is_recording = False
+        self.recorded_audio = b""
+
+    def start_recording(self):
+        self.is_recording = True
+
+    def stop_recording(self):
+        self.is_recording = False
+        return self.recorded_audio
+
+
 @pytest.fixture
 def fake_discovery():
-    d = MagicMock()
-    d.update_channel = MagicMock()
-    d.register = MagicMock()
-    d.start_browsing = MagicMock()
-    d.get_peers_on_channel = MagicMock(return_value=[])
-    d.shutdown = MagicMock()
-    return d
+    discovery = MagicMock()
+    discovery.update_channel = MagicMock()
+    discovery.register = MagicMock()
+    discovery.start_browsing = MagicMock()
+    discovery.get_peers_on_channel = MagicMock(return_value=[])
+    discovery.shutdown = MagicMock()
+    return discovery
 
 
 @pytest.fixture

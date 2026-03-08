@@ -10,6 +10,8 @@ logger = get_logger(__name__)
 class NewsChannel(BaseChannel):
     """News & Weather radio channel."""
 
+    channel_id = "news"
+
     def channel_name(self) -> str:
         return "News & Weather"
 
@@ -48,6 +50,8 @@ Reference major highways, intersections, and commute patterns typical for {conte
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: News & Weather - {subchannel.title()}
 VOICE STYLE: Professional news anchor. Authoritative but warm.
+
+{self.get_session_guidance(subchannel)}
 
 {specific}
 
