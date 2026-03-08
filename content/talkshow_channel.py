@@ -4,24 +4,13 @@ from dataclasses import dataclass
 from typing import AsyncGenerator
 
 from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk
+from content.personas import (
+    HostPersona, GuestPersona,
+    HOST_PERSONALITIES, GUEST_PERSONALITIES,
+)
 from log import get_logger, log_api_call
 
 logger = get_logger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class HostPersona:
-    name: str
-    show: str
-    personality: str
-
-
-@dataclass(frozen=True, slots=True)
-class GuestPersona:
-    name: str
-    title: str
-    personality: str
-    specialties: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,86 +18,6 @@ class TalkTurn:
     speaker_role: str
     speaker_name: str
     text: str
-
-
-HOST_PERSONALITIES = {
-    "tech": HostPersona(
-        name="Alex Circuit",
-        show="The Digital Pulse",
-        personality="Enthusiastic tech nerd who explains complex topics in fun, accessible ways. Loves analogies. Slightly sarcastic about tech hype.",
-    ),
-    "popculture": HostPersona(
-        name="Maya Buzz",
-        show="Culture Wave",
-        personality="Energetic, opinionated pop culture commentator. Has hot takes on everything from movies to memes. Loves connecting random cultural dots.",
-    ),
-    "philosophy": HostPersona(
-        name="Professor Nyx",
-        show="The Midnight Philosopher",
-        personality="Thoughtful, warm, slightly whimsical host who makes deep questions feel approachable. Uses everyday examples to explore big ideas.",
-    ),
-    "comedy": HostPersona(
-        name="Danny Punchline",
-        show="The Laugh Track",
-        personality="Quick-witted comedian who finds humor in current events and everyday life. Self-deprecating, observational comedy style. Keeps it clean.",
-    ),
-    "advice": HostPersona(
-        name="Dr. Sage",
-        show="The Open Line",
-        personality="Warm, empathetic advice host. Gives thoughtful perspective on life questions. Part therapist, part wise friend. Never preachy.",
-    ),
-}
-
-GUEST_PERSONALITIES = (
-    GuestPersona(
-        name="Rhea Vector",
-        title="product skeptic and AI builder",
-        personality="Fast-talking, playful, and allergic to hype. Loves asking whether a shiny new thing actually helps real people.",
-        specialties=("tech", "ai", "apps", "startups", "privacy", "internet"),
-    ),
-    GuestPersona(
-        name="Blair Meridian",
-        title="culture strategist and trend watcher",
-        personality="Calm, sharp, and globally aware. Reads drama like a systems problem and loves spotting the power move under the headline.",
-        specialties=("popculture", "internet", "social", "drama", "celebrity", "fashion"),
-    ),
-    GuestPersona(
-        name="Professor Mira Vale",
-        title="philosopher of technology and culture",
-        personality="Measured, insightful, and a little eerie in the best way. Turns messy headlines into bigger questions about meaning, identity, and power.",
-        specialties=("philosophy", "ethics", "society", "culture", "ai", "future"),
-    ),
-    GuestPersona(
-        name="Miles Static",
-        title="stand-up comic and internet anthropologist",
-        personality="Dry, mischievous, and quick with a sideways analogy. Loves pointing out the absurd detail everyone else missed.",
-        specialties=("comedy", "weird", "meme", "viral", "internet", "drama"),
-    ),
-    GuestPersona(
-        name="Nia Sol",
-        title="relationship coach with zero patience for nonsense",
-        personality="Warm but blunt. Cuts through chaos quickly and translates public messes into practical lessons about boundaries, work, and self-respect.",
-        specialties=("advice", "relationships", "career", "wellness", "burnout", "friendship"),
-    ),
-    GuestPersona(
-        name="Dex Wilder",
-        title="gossip columnist and chaos archivist",
-        personality="Big energy, gleefully observant, and impossible to bore. Treats every public spat like a tiny masterpiece of bad decision-making.",
-        specialties=("popculture", "drama", "celebrity", "viral", "meme", "comedy"),
-    ),
-    GuestPersona(
-        name="Jordan Pike",
-        title="career columnist and workplace realist",
-        personality="Grounded, skeptical, and very good at turning online noise into concrete advice about work, money, and ambition.",
-        specialties=("advice", "career", "money", "workplace", "tech", "economy"),
-    ),
-    GuestPersona(
-        name="Leona Drift",
-        title="future-of-society essayist",
-        personality="Thoughtful, probing, and a little poetic. Loves connecting today's trend to a deeper shift in how people live and relate to each other.",
-        specialties=("philosophy", "society", "future", "culture", "relationships", "internet"),
-    ),
-)
 
 SUBCHANNEL_TOPIC_KEYWORDS = {
     "tech": ("ai", "tech", "apple", "google", "meta", "startup", "robot", "chip", "app", "software", "internet", "openai", "tesla"),
@@ -316,14 +225,8 @@ FORMAT: Live caller interaction on a talk show.
         )
 
     def reset(self):
-        """Reset talk show playback state when tuning or switching channels."""
+        """Reset cancellation flag. History and guest state persist across switches."""
         super().reset()
-        self.clear_history()
-        self._turn_history.clear()
-        self._active_subchannel = "tech"
-        self._current_topic = None
-        self._current_guest = None
-        self._guest_rotation_index = 0
 
     async def _sleep_between_segments(self):
         await asyncio.sleep(0.5)

@@ -44,9 +44,14 @@ class RadioAgent:
     def __init__(self, channel: str = "news"):
         self.agent_id = str(uuid.uuid4())[:8]
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._generation_task: asyncio.Task | None = None
+        self._channel_tasks: dict[str, asyncio.Task] = {}
+        self._warm_tasks: dict[str, asyncio.Task] = {}
+        self._audio_consumer_task: asyncio.Task | None = None
         self._adc_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
+
+        self.ALWAYS_ON_CHANNELS = {"talkshow", "dailybrief"}
+        self.ON_DEMAND_CHANNELS = {"music", "memos"}
 
         # Context
         self.context = ContextProvider(CONFIG)
@@ -63,7 +68,9 @@ class RadioAgent:
         )
         if not CONFIG.get("DEEPGRAM_API_KEY"):
             logger.warning("DEEPGRAM_API_KEY not set, call-in transcription is unavailable")
-        self.player = AudioPlayer()
+        self.player = AudioPlayer(
+            radio_filter_strength=CONFIG.get("RADIO_FILTER_STRENGTH", 0.7),
+        )
 
         # Spotify (optional)
         self.spotify = None
@@ -127,8 +134,11 @@ class RadioAgent:
                 statement, self.active_subchannel
             )
             voice_id = channel.get_cohost_voice_id() if hasattr(channel, "get_cohost_voice_id") else channel.get_voice_id("")
+            self.player.start_static()
             audio = await self.tts.synthesize(response_text, voice_id)
-            self.player.enqueue_mp3(audio)
+            self.player.stop_static()
+            gid = self.player._gen_id
+            await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
             return msg_cohost_response(response_text, voice_id)
         return {"type": "error", "message": "Channel doesn't support co-hosting"}
@@ -140,8 +150,11 @@ class RadioAgent:
 
         channel = self.channels.get(self.active_channel)
         async for chunk in channel.handle_callin(transcript):
+            self.player.start_static()
             audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
-            self.player.enqueue_mp3(audio)
+            self.player.stop_static()
+            gid = self.player._gen_id
+            await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
         return {"type": "ack"}
 
@@ -190,52 +203,124 @@ class RadioAgent:
         elif event.event_type == "nfc_press":
             await self._handle_nfc()
 
+    # ------------------------------------------------------------------
+    # Audio consumer: reads from active channel queue -> TTS -> player
+    # ------------------------------------------------------------------
+
+    async def _audio_consumer(self):
+        """Read chunks from the active channel's queue, synthesize, and play."""
+        channel = self.channels[self.active_channel]
+        logger.info("audio_consumer.started", extra={"channel": self.active_channel})
+        try:
+            warm = channel._warm_audio[:]
+            channel._warm_audio.clear()
+            if warm:
+                logger.info("audio_consumer.playing_warm_cache",
+                            extra={"channel": self.active_channel, "segments": len(warm)})
+                self.player.stop_static()
+            gid = self.player._gen_id
+            for audio in warm:
+                await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
+
+            while True:
+                self.player.start_static()
+                chunk = await channel._output_queue.get()
+
+                if chunk.text:
+                    audio_bytes = await self.tts.synthesize(chunk.text, chunk.voice_id)
+                    self.player.stop_static()
+                    gid = self.player._gen_id
+                    await asyncio.to_thread(self.player.enqueue_mp3, audio_bytes, gid)
+
+                if chunk.pause_after > 0:
+                    await asyncio.sleep(chunk.pause_after)
+
+                if chunk.play_music and os.path.exists(chunk.play_music):
+                    self.player.stop_static()
+                    self.player.play_file(chunk.play_music)
+        except asyncio.CancelledError:
+            logger.info("audio_consumer.cancelled")
+        finally:
+            self.player.stop_static()
+
+    async def _restart_audio_consumer(self):
+        """Cancel current audio consumer and flush the audio buffer."""
+        if self._audio_consumer_task:
+            self._audio_consumer_task.cancel()
+            try:
+                await self._audio_consumer_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self.player.interrupt()
+
+    def _drain_queue(self, channel_id: str):
+        """Discard any stale chunks sitting in a channel's output queue."""
+        q = self.channels[channel_id]._output_queue
+        discarded = 0
+        while not q.empty():
+            try:
+                q.get_nowait()
+                discarded += 1
+            except asyncio.QueueEmpty:
+                break
+        if discarded:
+            logger.debug("Drained stale chunks", extra={"channel": channel_id, "count": discarded})
+
+    # ------------------------------------------------------------------
+    # Channel switching
+    # ------------------------------------------------------------------
+
     async def _switch_channel(self, channel: str):
         """Switch to a different content channel."""
         if channel == self.active_channel:
             return
 
+        old_id = self.active_channel
+        self.active_channel = channel
         logger.info("Switching to: %s", CHANNELS[channel]['name'])
 
-        # Cancel current generation
-        if self._generation_task:
-            current_ch = self.channels.get(self.active_channel)
-            if current_ch:
-                current_ch.cancel()
-            self._generation_task.cancel()
-            try:
-                await self._generation_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._restart_audio_consumer()
+        self.player.start_static()
 
-        # Clear audio buffer and play channel switch SFX
-        self.player.clear_buffer()
-        sfx_path = "assets/sfx/channel_switch.wav"
-        if os.path.exists(sfx_path):
-            self.player.play_file(sfx_path)
+        old_ch = self.channels[old_id]
+        await old_ch.on_deactivate()
 
-        # Update state
-        self.active_channel = channel
+        if old_id in self.ON_DEMAND_CHANNELS:
+            await self._stop_on_demand_channel(old_id)
+
+        old_ch.set_on_air(False)
+
         self.active_subchannel = resolve_subchannel(channel, self.input.dial_position)
+        self.channels[channel].set_subchannel(self.active_subchannel)
         self.leds.activate(channel)
         try:
             self.discovery.update_channel(channel)
         except Exception as e:
             logger.warning("Discovery update failed (non-fatal): %s", e)
 
-        # Update display
         self.display.update(
             channel=CHANNELS[channel]["name"],
             subchannel=get_subchannel_name(channel, self.active_subchannel),
             volume=self.input.volume,
         )
 
-        # Start new content generation
-        new_ch = self.channels[channel]
-        new_ch.reset()
-        self._generation_task = asyncio.create_task(self._content_loop())
+        sfx_path = "assets/sfx/channel_switch.wav"
+        if os.path.exists(sfx_path):
+            self.player.play_file(sfx_path)
 
-        # Check for peers on same channel (co-host mode)
+        new_ch = self.channels[channel]
+        await new_ch.on_activate()
+
+        if channel in self.ON_DEMAND_CHANNELS:
+            self._start_on_demand_channel(channel)
+
+        self._drain_queue(channel)
+        new_ch.set_on_air(True)
+        self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
+
+        if old_id in self.ON_DEMAND_CHANNELS:
+            asyncio.create_task(self._warm_on_demand(old_id))
+
         await self._check_cohost()
 
     async def _tune_subchannel(self, subchannel: str):
@@ -246,25 +331,21 @@ class RadioAgent:
         name = get_subchannel_name(self.active_channel, subchannel)
         logger.info("Tuning to: %s", name)
 
-        # Cancel and restart
-        if self._generation_task:
-            self.channels[self.active_channel].cancel()
-            self._generation_task.cancel()
-            try:
-                await self._generation_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._restart_audio_consumer()
+        self.player.start_static()
 
-        self.player.clear_buffer()
         sfx_path = "assets/sfx/tuning_static.wav"
         if os.path.exists(sfx_path):
             self.player.play_file(sfx_path)
 
         self.active_subchannel = subchannel
-        self.channels[self.active_channel].reset()
-        self._generation_task = asyncio.create_task(self._content_loop())
+        ch = self.channels[self.active_channel]
+        ch.set_subchannel(subchannel)
+        ch.interrupt()
 
-        # Update display
+        self._drain_queue(self.active_channel)
+        self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
+
         self.display.update(
             channel=CHANNELS[self.active_channel]["name"],
             subchannel=name,
@@ -293,7 +374,6 @@ class RadioAgent:
         if not transcript.strip():
             return
 
-        # Check if we should forward to a peer
         peers = self.discovery.get_peers_on_channel(self.active_channel)
         if peers:
             peer = peers[0]
@@ -302,11 +382,13 @@ class RadioAgent:
                 peer, msg_callin_forward(transcript, self.agent_id)
             )
 
-        # Also handle locally
-        channel = self.channels.get(self.active_channel)
-        async for chunk in channel.handle_callin(transcript):
-            audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
-            self.player.enqueue_mp3(audio)
+        await self._restart_audio_consumer()
+
+        channel = self.channels[self.active_channel]
+        channel.interrupt(callin=transcript)
+
+        self._drain_queue(self.active_channel)
+        self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
 
     async def _handle_nfc(self):
         """Read NFC tag and integrate its contents."""
@@ -330,30 +412,90 @@ class RadioAgent:
         # Announce via TTS
         voice_id = CONFIG["VOICES"].get("memo_host", "pNInz6obpgDQGcFmaJgB")
         announcement = f"NFC tag received. Content saved to memos: {text[:80]}"
+        self.player.start_static()
         audio = await self.tts.synthesize(announcement, voice_id)
-        self.player.enqueue_mp3(audio)
+        self.player.stop_static()
+        gid = self.player._gen_id
+        await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
-    async def _content_loop(self):
-        """Continuously generate and play content for the current channel."""
-        channel = self.channels[self.active_channel]
-        subchannel = self.active_subchannel
+    def _start_always_on_channels(self):
+        """Start background tasks for always-on channels (talkshow, dailybrief)."""
+        for channel_id in self.ALWAYS_ON_CHANNELS:
+            channel = self.channels[channel_id]
+            subchannel = resolve_subchannel(channel_id, self.input.dial_position)
+            channel.set_subchannel(subchannel)
+            self._channel_tasks[channel_id] = asyncio.create_task(
+                channel.run_background()
+            )
+            self._warm_tasks[channel_id] = asyncio.create_task(
+                self._warm_producer(channel_id)
+            )
 
+    async def _warm_producer(self, channel_id: str):
+        """Pre-synthesize ONE TTS segment for an off-air always-on channel.
+
+        Only synthesizes when the warm cache is empty. Once a segment is
+        cached, subsequent off-air chunks are discarded (LLM history still
+        updates but we don't burn ElevenLabs credits on audio nobody hears).
+        """
+        channel = self.channels[channel_id]
         try:
-            async for chunk in channel.stream_content(subchannel):
-                if chunk.text:
-                    audio_bytes = await self.tts.synthesize(chunk.text, chunk.voice_id)
-                    self.player.enqueue_mp3(audio_bytes)
-
-                if chunk.pause_after > 0:
-                    await asyncio.sleep(chunk.pause_after)
-
-                if chunk.play_music and os.path.exists(chunk.play_music):
-                    self.player.play_file(chunk.play_music)
-
+            while True:
+                chunk = await channel._warm_queue.get()
+                if chunk.text and not channel._warm_audio:
+                    try:
+                        audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
+                        channel._warm_audio = [audio]
+                        logger.debug("warm_producer.cached", extra={"channel": channel_id})
+                    except Exception as e:
+                        logger.warning("warm_producer.synthesis_failed: %s", e,
+                                       extra={"channel": channel_id})
         except asyncio.CancelledError:
             pass
+
+    async def _warm_on_demand(self, channel_id: str):
+        """Pre-generate and synthesize a warm preview for an on-demand channel."""
+        channel = self.channels[channel_id]
+        try:
+            chunks = await channel.generate_warm_preview()
+            for chunk in chunks:
+                if chunk.text:
+                    audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
+                    channel._warm_audio = [audio]
+                    logger.info("warm_on_demand.cached", extra={"channel": channel_id})
+                    break
         except Exception as e:
-            logger.error("Content generation error: %s", e)
+            logger.warning("warm_on_demand.failed: %s", e, extra={"channel": channel_id})
+
+    async def _warm_all_inactive(self):
+        """At startup, warm all channels that are not the initial active channel."""
+        tasks = []
+        for channel_id in self.channels:
+            if channel_id == self.active_channel:
+                continue
+            if channel_id in self.ON_DEMAND_CHANNELS:
+                tasks.append(self._warm_on_demand(channel_id))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _start_on_demand_channel(self, channel_id: str):
+        """Start the background task for an on-demand channel."""
+        channel = self.channels[channel_id]
+        subchannel = resolve_subchannel(channel_id, self.input.dial_position)
+        channel.set_subchannel(subchannel)
+        self._channel_tasks[channel_id] = asyncio.create_task(
+            channel.run_background()
+        )
+
+    async def _stop_on_demand_channel(self, channel_id: str):
+        """Cancel the background task for an on-demand channel."""
+        task = self._channel_tasks.pop(channel_id, None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     async def _check_cohost(self):
         """If a peer is on the same channel, initiate co-host mode."""
@@ -369,8 +511,9 @@ class RadioAgent:
         # Show startup splash on e-ink
         self.display.show_startup()
 
-        # Start audio playback
+        # Start audio playback -- static crackle from boot until first TTS audio
         self.player.start()
+        self.player.start_static()
 
         # Start network services
         self.discovery.register(channel=self.active_channel)
@@ -393,10 +536,16 @@ class RadioAgent:
         logger.info("  Channel: %s", CHANNELS[self.active_channel]['name'])
         logger.info("=" * 50)
 
-        # Start content generation
-        self._generation_task = asyncio.create_task(self._content_loop())
+        self._start_always_on_channels()
 
-        # Start ADC polling for slide potentiometers (if hardware present)
+        if self.active_channel in self.ON_DEMAND_CHANNELS:
+            self._start_on_demand_channel(self.active_channel)
+
+        self.channels[self.active_channel].set_on_air(True)
+        self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
+
+        asyncio.create_task(self._warm_all_inactive())
+
         if self.input._use_gpio:
             self._adc_task = asyncio.create_task(self.input.start_adc_polling())
 
@@ -431,12 +580,30 @@ class RadioAgent:
         """Clean up all resources."""
         logger.info("Shutting down...")
 
-        if self._generation_task:
-            self._generation_task.cancel()
+        if self._audio_consumer_task:
+            self._audio_consumer_task.cancel()
             try:
-                await self._generation_task
+                await self._audio_consumer_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+        for task in self._warm_tasks.values():
+            task.cancel()
+        for task in self._warm_tasks.values():
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._warm_tasks.clear()
+
+        for task in self._channel_tasks.values():
+            task.cancel()
+        for task in self._channel_tasks.values():
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._channel_tasks.clear()
 
         if self._adc_task:
             self._adc_task.cancel()

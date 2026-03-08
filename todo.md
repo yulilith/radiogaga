@@ -1,0 +1,5 @@
+- switch channels quickly
+- support having three hosts that easily configurable
+- static radio sounds
+- knob that will adjust personality 
+- 

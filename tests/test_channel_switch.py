@@ -6,7 +6,7 @@ the external services (Anthropic, ElevenLabs, Spotify, mDNS).
 
 import asyncio
 import queue
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -39,6 +39,7 @@ class FakeAudioPlayer:
         self.audio_queue = queue.Queue(maxsize=100)
         self._volume = 0.7
         self._muted = False
+        self._gen_id = 0
         self.started = False
         self.enqueued_chunks = []
 
@@ -60,6 +61,16 @@ class FakeAudioPlayer:
     def start(self):
         self.started = True
 
+    def interrupt(self):
+        self._gen_id += 1
+        self.clear_buffer()
+
+    def start_static(self):
+        pass
+
+    def stop_static(self):
+        pass
+
     def clear_buffer(self):
         while not self.audio_queue.empty():
             try:
@@ -70,7 +81,7 @@ class FakeAudioPlayer:
     def buffer_level(self):
         return self.audio_queue.qsize()
 
-    def enqueue_mp3(self, mp3_bytes):
+    def enqueue_mp3(self, mp3_bytes, gen_id=None):
         self.enqueued_chunks.append(mp3_bytes)
 
     def play_file(self, path):
@@ -81,30 +92,61 @@ class FakeAudioPlayer:
 
 
 class FakeChannel:
-    """Minimal channel that yields one chunk then waits."""
+    """Minimal channel that produces chunks via the background queue pattern."""
 
     def __init__(self, name):
         self._name = name
         self._cancelled = False
-        self.stream_called_count = 0
+        self._on_air = False
+        self._subchannel = ""
+        self._output_queue: asyncio.Queue[ContentChunk] = asyncio.Queue(maxsize=2)
+        self._warm_queue: asyncio.Queue[ContentChunk] = asyncio.Queue(maxsize=1)
+        self._warm_audio: list[bytes] = []
+        self._bg_task: asyncio.Task | None = None
+        self.chunks_produced = 0
 
     def channel_name(self):
         return self._name
 
-    async def stream_content(self, subchannel):
-        self.stream_called_count += 1
-        while not self._cancelled:
-            yield ContentChunk(text=f"Hello from {self._name}", voice_id="v1")
-            await asyncio.sleep(0.05)
+    def set_on_air(self, on_air):
+        self._on_air = on_air
+
+    def set_subchannel(self, sub):
+        self._subchannel = sub
+
+    def interrupt(self, callin=None):
+        self._cancelled = True
 
     def cancel(self):
-        self._cancelled = True
+        self.interrupt()
 
     def reset(self):
         self._cancelled = False
 
     def get_voice_id(self, sub):
         return "v1"
+
+    async def on_activate(self):
+        pass
+
+    async def on_deactivate(self):
+        pass
+
+    async def generate_warm_preview(self):
+        return []
+
+    async def run_background(self):
+        while True:
+            self._cancelled = False
+            try:
+                while not self._cancelled:
+                    chunk = ContentChunk(text=f"Hello from {self._name}", voice_id="v1")
+                    self.chunks_produced += 1
+                    if self._on_air:
+                        await self._output_queue.put(chunk)
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                break
 
 
 @pytest.fixture
@@ -125,172 +167,141 @@ def fake_tts():
     return tts
 
 
-@pytest.mark.asyncio
-async def test_switch_channel_starts_new_content_loop(config, fake_discovery, fake_tts):
-    """After switching channels, the new channel's stream_content must be called."""
+def _make_agent(fake_discovery, fake_tts, channels_dict):
+    """Wire up a RadioAgent with fake components (no real __init__)."""
     from main import RadioAgent
 
-    with patch.object(RadioAgent, "__init__", lambda self: None):
-        agent = RadioAgent.__new__(RadioAgent)
-        agent._loop = asyncio.get_event_loop()
-        agent._generation_task = None
-        agent._stop_event = asyncio.Event()
-        agent.player = FakeAudioPlayer()
-        agent.tts = fake_tts
-        agent.discovery = fake_discovery
-        agent.leds = MagicMock()
-        agent.input = MagicMock(dial_position=50)
-        agent.peer_client = MagicMock()
+    agent = RadioAgent.__new__(RadioAgent)
+    agent._loop = asyncio.get_event_loop()
+    agent._audio_consumer_task = None
+    agent._channel_tasks = {}
+    agent._warm_tasks = {}
+    agent._stop_event = asyncio.Event()
+    agent.ALWAYS_ON_CHANNELS = set()
+    agent.ON_DEMAND_CHANNELS = set()
+    agent.player = FakeAudioPlayer()
+    agent.tts = fake_tts
+    agent.discovery = fake_discovery
+    agent.leds = MagicMock()
+    agent.display = MagicMock()
+    agent.input = MagicMock(dial_position=50, volume=70)
+    agent.peer_client = MagicMock()
+    agent.channels = channels_dict
+    agent.active_channel = list(channels_dict.keys())[0]
+    agent.active_subchannel = "local"
+    return agent
 
-        news = FakeChannel("News & Weather")
-        talkshow = FakeChannel("Talk Show")
-        agent.channels = {"news": news, "talkshow": talkshow}
-        agent.active_channel = "news"
-        agent.active_subchannel = "local"
 
-        agent._generation_task = asyncio.create_task(agent._content_loop())
-        await asyncio.sleep(0.1)
+async def _cleanup_agent(agent):
+    if agent._audio_consumer_task and not agent._audio_consumer_task.done():
+        agent._audio_consumer_task.cancel()
+        try:
+            await agent._audio_consumer_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    for t in agent._channel_tasks.values():
+        t.cancel()
+        try:
+            await t
+        except (asyncio.CancelledError, Exception):
+            pass
 
-        assert news.stream_called_count == 1
 
-        await agent._switch_channel("talkshow")
-        await asyncio.sleep(0.15)
+@pytest.mark.asyncio
+async def test_switch_channel_sets_new_channel_on_air(config, fake_discovery, fake_tts):
+    """After switching channels, the new channel must be on-air and producing."""
+    news = FakeChannel("News & Weather")
+    talkshow = FakeChannel("Talk Show")
+    agent = _make_agent(fake_discovery, fake_tts, {"news": news, "talkshow": talkshow})
 
-        assert agent.active_channel == "talkshow"
-        assert talkshow.stream_called_count == 1
-        assert talkshow._cancelled is False
+    news.set_on_air(True)
+    agent._channel_tasks["news"] = asyncio.create_task(news.run_background())
+    agent._channel_tasks["talkshow"] = asyncio.create_task(talkshow.run_background())
+    agent._audio_consumer_task = asyncio.create_task(agent._audio_consumer())
+    await asyncio.sleep(0.15)
 
-        if agent._generation_task:
-            agent._generation_task.cancel()
-            try:
-                await agent._generation_task
-            except (asyncio.CancelledError, Exception):
-                pass
+    await agent._switch_channel("talkshow")
+    await asyncio.sleep(0.15)
+
+    assert agent.active_channel == "talkshow"
+    assert talkshow._on_air is True
+    assert news._on_air is False
+    assert talkshow.chunks_produced >= 1
+
+    await _cleanup_agent(agent)
 
 
 @pytest.mark.asyncio
 async def test_switch_channel_clears_buffer(config, fake_discovery, fake_tts):
     """Switching channels must clear the audio buffer."""
-    from main import RadioAgent
+    news = FakeChannel("News & Weather")
+    talkshow = FakeChannel("Talk Show")
+    agent = _make_agent(fake_discovery, fake_tts, {"news": news, "talkshow": talkshow})
 
-    with patch.object(RadioAgent, "__init__", lambda self: None):
-        agent = RadioAgent.__new__(RadioAgent)
-        agent._loop = asyncio.get_event_loop()
-        agent._generation_task = None
-        agent._stop_event = asyncio.Event()
-        agent.player = FakeAudioPlayer()
-        agent.tts = fake_tts
-        agent.discovery = fake_discovery
-        agent.leds = MagicMock()
-        agent.input = MagicMock(dial_position=50)
-        agent.peer_client = MagicMock()
+    for _ in range(5):
+        agent.player.audio_queue.put(b"\x00" * 100)
+    assert agent.player.buffer_level() == 5
 
-        news = FakeChannel("News & Weather")
-        talkshow = FakeChannel("Talk Show")
-        agent.channels = {"news": news, "talkshow": talkshow}
-        agent.active_channel = "news"
-        agent.active_subchannel = "local"
+    agent._channel_tasks["news"] = asyncio.create_task(news.run_background())
+    agent._channel_tasks["talkshow"] = asyncio.create_task(talkshow.run_background())
 
-        for i in range(5):
-            agent.player.audio_queue.put(b"\x00" * 100)
-        assert agent.player.buffer_level() == 5
+    await agent._switch_channel("talkshow")
 
-        await agent._switch_channel("talkshow")
+    assert agent.player.buffer_level() == 0
 
-        assert agent.player.buffer_level() == 0
-
-        if agent._generation_task:
-            agent._generation_task.cancel()
-            try:
-                await agent._generation_task
-            except (asyncio.CancelledError, Exception):
-                pass
+    await _cleanup_agent(agent)
 
 
 @pytest.mark.asyncio
-async def test_switch_channel_cancels_old_generation(config, fake_discovery, fake_tts):
-    """Switching channels must cancel the previous content loop."""
-    from main import RadioAgent
+async def test_switch_channel_takes_old_off_air(config, fake_discovery, fake_tts):
+    """Switching channels must set the old channel off-air."""
+    news = FakeChannel("News & Weather")
+    talkshow = FakeChannel("Talk Show")
+    agent = _make_agent(fake_discovery, fake_tts, {"news": news, "talkshow": talkshow})
 
-    with patch.object(RadioAgent, "__init__", lambda self: None):
-        agent = RadioAgent.__new__(RadioAgent)
-        agent._loop = asyncio.get_event_loop()
-        agent._generation_task = None
-        agent._stop_event = asyncio.Event()
-        agent.player = FakeAudioPlayer()
-        agent.tts = fake_tts
-        agent.discovery = fake_discovery
-        agent.leds = MagicMock()
-        agent.input = MagicMock(dial_position=50)
-        agent.peer_client = MagicMock()
+    news.set_on_air(True)
+    agent._channel_tasks["news"] = asyncio.create_task(news.run_background())
+    agent._channel_tasks["talkshow"] = asyncio.create_task(talkshow.run_background())
+    agent._audio_consumer_task = asyncio.create_task(agent._audio_consumer())
+    await asyncio.sleep(0.1)
 
-        news = FakeChannel("News & Weather")
-        talkshow = FakeChannel("Talk Show")
-        agent.channels = {"news": news, "talkshow": talkshow}
-        agent.active_channel = "news"
-        agent.active_subchannel = "local"
+    await agent._switch_channel("talkshow")
 
-        agent._generation_task = asyncio.create_task(agent._content_loop())
-        await asyncio.sleep(0.1)
+    assert news._on_air is False
+    assert talkshow._on_air is True
 
-        await agent._switch_channel("talkshow")
-
-        assert news._cancelled is True
-
-        if agent._generation_task:
-            agent._generation_task.cancel()
-            try:
-                await agent._generation_task
-            except (asyncio.CancelledError, Exception):
-                pass
+    await _cleanup_agent(agent)
 
 
 @pytest.mark.asyncio
 async def test_rapid_channel_switching(config, fake_discovery, fake_tts):
     """Rapidly switching channels should not leave the agent in a broken state."""
-    from main import RadioAgent
+    channels = {
+        "dailybrief": FakeChannel("Daily Brief"),
+        "talkshow": FakeChannel("Talk Show"),
+        "music": FakeChannel("Music"),
+        "memos": FakeChannel("Memos"),
+    }
+    agent = _make_agent(fake_discovery, fake_tts, channels)
 
-    with patch.object(RadioAgent, "__init__", lambda self: None):
-        agent = RadioAgent.__new__(RadioAgent)
-        agent._loop = asyncio.get_event_loop()
-        agent._generation_task = None
-        agent._stop_event = asyncio.Event()
-        agent.player = FakeAudioPlayer()
-        agent.tts = fake_tts
-        agent.discovery = fake_discovery
-        agent.leds = MagicMock()
-        agent.input = MagicMock(dial_position=50)
-        agent.peer_client = MagicMock()
+    channels["dailybrief"].set_on_air(True)
+    for cid, ch in channels.items():
+        agent._channel_tasks[cid] = asyncio.create_task(ch.run_background())
+    agent._audio_consumer_task = asyncio.create_task(agent._audio_consumer())
+    await asyncio.sleep(0.05)
 
-        channels = {
-            "news": FakeChannel("News"),
-            "talkshow": FakeChannel("Talk Show"),
-            "sports": FakeChannel("Sports"),
-            "dj": FakeChannel("DJ"),
-        }
-        agent.channels = channels
-        agent.active_channel = "news"
-        agent.active_subchannel = "local"
+    for ch in ["talkshow", "music", "memos", "dailybrief", "talkshow"]:
+        await agent._switch_channel(ch)
+        await asyncio.sleep(0.02)
 
-        agent._generation_task = asyncio.create_task(agent._content_loop())
-        await asyncio.sleep(0.05)
+    assert agent.active_channel == "talkshow"
+    assert agent._audio_consumer_task is not None
+    assert not agent._audio_consumer_task.done()
 
-        for ch in ["talkshow", "sports", "dj", "news", "talkshow"]:
-            await agent._switch_channel(ch)
-            await asyncio.sleep(0.02)
+    await asyncio.sleep(0.15)
+    assert channels["talkshow"].chunks_produced >= 1
 
-        assert agent.active_channel == "talkshow"
-        assert agent._generation_task is not None
-        assert not agent._generation_task.done()
-
-        await asyncio.sleep(0.1)
-        assert channels["talkshow"].stream_called_count >= 1
-
-        agent._generation_task.cancel()
-        try:
-            await agent._generation_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    await _cleanup_agent(agent)
 
 
 @pytest.mark.asyncio
@@ -298,42 +309,25 @@ async def test_discovery_update_channel_failure_does_not_block_content(
     config, fake_tts
 ):
     """Even if discovery.update_channel raises, channel switch must still start content."""
-    from main import RadioAgent
-
     failing_discovery = MagicMock()
     failing_discovery.update_channel = MagicMock(side_effect=RuntimeError("mDNS down"))
     failing_discovery.get_peers_on_channel = MagicMock(return_value=[])
 
-    with patch.object(RadioAgent, "__init__", lambda self: None):
-        agent = RadioAgent.__new__(RadioAgent)
-        agent._loop = asyncio.get_event_loop()
-        agent._generation_task = None
-        agent._stop_event = asyncio.Event()
-        agent.player = FakeAudioPlayer()
-        agent.tts = fake_tts
-        agent.discovery = failing_discovery
-        agent.leds = MagicMock()
-        agent.input = MagicMock(dial_position=50)
-        agent.peer_client = MagicMock()
+    news = FakeChannel("News")
+    talkshow = FakeChannel("Talk Show")
+    agent = _make_agent(failing_discovery, fake_tts, {"news": news, "talkshow": talkshow})
 
-        news = FakeChannel("News")
-        talkshow = FakeChannel("Talk Show")
-        agent.channels = {"news": news, "talkshow": talkshow}
-        agent.active_channel = "news"
-        agent.active_subchannel = "local"
+    news.set_on_air(True)
+    agent._channel_tasks["news"] = asyncio.create_task(news.run_background())
+    agent._channel_tasks["talkshow"] = asyncio.create_task(talkshow.run_background())
+    agent._audio_consumer_task = asyncio.create_task(agent._audio_consumer())
 
-        await agent._switch_channel("talkshow")
-        await asyncio.sleep(0.15)
+    await agent._switch_channel("talkshow")
+    await asyncio.sleep(0.15)
 
-        assert agent.active_channel == "talkshow"
-        assert talkshow.stream_called_count >= 1, (
-            "Content loop must start even when discovery fails"
-        )
-        assert agent._generation_task is not None
-        assert not agent._generation_task.done()
+    assert agent.active_channel == "talkshow"
+    assert talkshow._on_air is True
+    assert agent._audio_consumer_task is not None
+    assert not agent._audio_consumer_task.done()
 
-        agent._generation_task.cancel()
-        try:
-            await agent._generation_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    await _cleanup_agent(agent)
