@@ -16,8 +16,8 @@ class MusicChannel(BaseChannel):
     """
 
     def __init__(self, context_provider, config: dict,
-                 spotify_service=None, music_manager=None):
-        super().__init__(context_provider, config)
+                 spotify_service=None, music_manager=None, persona=None):
+        super().__init__(context_provider, config, persona=persona)
         self.spotify = spotify_service
         self.music_manager = music_manager
         self._current_track: dict | None = None
@@ -76,9 +76,6 @@ class MusicChannel(BaseChannel):
             return [ContentChunk(text=banter.strip(), voice_id=voice_id, pause_after=0.5)]
         return []
 
-    def get_voice_id(self, subchannel: str) -> str:
-        return self.config["VOICES"].get("dj", "iP95p4xoKVk53GoZ742B")
-
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         mode_desc = {
             "top_tracks": "playing the listener's most-loved tracks",
@@ -106,10 +103,12 @@ NEXT SONG COMING UP:
 
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: Music - {subchannel.replace('_', ' ').title()}
-VOICE STYLE: Upbeat DJ personality. Fun, energetic, music-knowledgeable.
+YOUR NAME: {self.persona.name if self.persona else 'DJ Spark'}
+YOUR PERSONALITY: {self.persona.personality if self.persona else 'Upbeat DJ personality. Fun, energetic, music-knowledgeable.'}
 DJ MODE: {mode_desc}
+Stay in character. Filter everything through your personality.
 
-You are DJ Spark on RadioAgent's music channel.
+You are {self.persona.name if self.persona else 'DJ Spark'} on RadioAgent's music channel.
 {track_info}
 {next_track}
 

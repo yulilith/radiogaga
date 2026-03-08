@@ -20,6 +20,8 @@ CONFIG = {
     "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID"),
     "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET"),
     "REDDIT_USER_AGENT": os.getenv("REDDIT_USER_AGENT", "RadioAgent/1.0"),
+    "EXA_API_KEY": os.getenv("EXA_API_KEY"),
+    "DEBUG_LLM_WITHOUT_VOICE": os.getenv("DEBUG_LLM_WITHOUT_VOICE", "false").lower() == "true",
 
     # LLM Settings
     "LLM_MODEL": "claude-haiku-4-5-20251001",
@@ -41,15 +43,17 @@ CONFIG = {
     "BUFFER_SIZE": 1024,
     "RADIO_FILTER_STRENGTH": float(os.getenv("RADIO_FILTER_STRENGTH", "0.7")),
 
-    # Voice IDs — sourced from content/personas.py, can be overridden at runtime
+    # Voice IDs — one per persona, sourced from content/personas.py
     "VOICES": {
-        "news_anchor": "pNInz6obpgDQGcFmaJgB",       # Adam — Daily Brief
-        "field_reporter": "EXAVITQu4vr4xnSDxMaL",     # Bella — Weather/Traffic
-        "talk_host": "onwK4e9ZLuTAKqWW03F9",          # Daniel — Talk Show
-        "talk_cohost": "XB0fDUnXU5powFXDhCwa",        # Charlotte — Talk co-host
-        "dj": "iP95p4xoKVk53GoZ742B",                 # Chris — Music channel
-        "memo_host": "pNInz6obpgDQGcFmaJgB",          # Adam — Memos readback
-        "sports_commentator": "TX3LPaxmHKxFdv7VOQHJ", # Liam — Sports
+        "dj":                 "iP95p4xoKVk53GoZ742B",   # Chris — DJ Spark
+        "wacky_gymbro":       "IKne3meq5aSn9XLyUdCD",   # Charlie — Brax Ironclad
+        "wacky_conspiracy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura — Tiffany Cosmos
+        "wacky_grandpa":      "pqHfZKP75CvOlQylNhV4",   # Bill — Cornelius Thatch
+        "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily — Sable Nightshade
+        "wacky_techbro":      "N2lVS1w4EtoT3dr4eOWO",   # Callum — Jax Wirecutter
+        "wacky_grandma":      "cgSgspJ2msm6clMCkdW9",   # Jessica — Peggy Butterworth
+        "wacky_weather":      "SOYHLrjzK2X1ezoPC6cr",   # Harry — Captain Rick Stormborn
+        "wacky_alien":        "SAz9YHcvj6GT2YYXdXww",   # River — Zephyr-7
     },
 
     # ─────────────────────────────────────────────────────────────

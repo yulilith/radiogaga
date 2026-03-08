@@ -14,9 +14,6 @@ class SportsChannel(BaseChannel):
     def channel_name(self) -> str:
         return "Sports"
 
-    def get_voice_id(self, subchannel: str) -> str:
-        return self.config["VOICES"].get("sports_commentator", "TX3LPaxmHKxFdv7VOQHJ")
-
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         # Sports-specific context
         scores = context.get("live_scores", [])
