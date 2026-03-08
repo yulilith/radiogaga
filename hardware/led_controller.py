@@ -33,7 +33,7 @@ class LEDController:
             logger.info("GPIO LED controller initialized",
                         extra={"channel_pins": self.CHANNEL_LED_MAP,
                                "slider_pins": self.SLIDER_LED_MAP})
-        except (ImportError, RuntimeError):
+        except Exception:
             logger.info("GPIO not available, LED state will be logged only")
             self._use_gpio = False
 
