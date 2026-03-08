@@ -10,13 +10,10 @@ logger = get_logger(__name__)
 class NewsChannel(BaseChannel):
     """News & Weather radio channel."""
 
+    channel_id = "news"
+
     def channel_name(self) -> str:
         return "News & Weather"
-
-    def get_voice_id(self, subchannel: str) -> str:
-        if subchannel == "weather":
-            return self.config["VOICES"].get("field_reporter", "EXAVITQu4vr4xnSDxMaL")
-        return self.config["VOICES"].get("news_anchor", "pNInz6obpgDQGcFmaJgB")
 
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         logger.info("generating news segment", extra={"subchannel": subchannel})
@@ -53,6 +50,8 @@ Reference major highways, intersections, and commute patterns typical for {conte
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: News & Weather - {subchannel.title()}
 VOICE STYLE: Professional news anchor. Authoritative but warm.
+
+{self.get_session_guidance(subchannel)}
 
 {specific}
 

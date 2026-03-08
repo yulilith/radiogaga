@@ -5,30 +5,6 @@ from log import get_logger
 logger = get_logger(__name__)
 
 CHANNELS = {
-    "dailybrief": {
-        "name": "Daily Brief",
-        "btn_pin": 5,
-        "led_pin": 12,
-        "subchannels": [
-            {"id": "local", "name": "Local News", "dial_min": 0, "dial_max": 20},
-            {"id": "national", "name": "National News", "dial_min": 21, "dial_max": 40},
-            {"id": "world", "name": "World News", "dial_min": 41, "dial_max": 60},
-            {"id": "weather", "name": "Weather", "dial_min": 61, "dial_max": 80},
-            {"id": "traffic", "name": "Traffic", "dial_min": 81, "dial_max": 100},
-        ],
-    },
-    "talkshow": {
-        "name": "Talk Show",
-        "btn_pin": 6,
-        "led_pin": 22,
-        "subchannels": [
-            {"id": "tech", "name": "Tech Debate", "dial_min": 0, "dial_max": 20},
-            {"id": "popculture", "name": "Culture Debate", "dial_min": 21, "dial_max": 40},
-            {"id": "philosophy", "name": "Philosophy Debate", "dial_min": 41, "dial_max": 60},
-            {"id": "comedy", "name": "Comedy Debate", "dial_min": 61, "dial_max": 80},
-            {"id": "advice", "name": "Life Advice Debate", "dial_min": 81, "dial_max": 100},
-        ],
-    },
     "music": {
         "name": "Music",
         "btn_pin": 13,
@@ -39,6 +15,26 @@ CHANNELS = {
             {"id": "genre", "name": "Genre Radio", "dial_min": 41, "dial_max": 60},
             {"id": "mood", "name": "Mood / Vibe", "dial_min": 61, "dial_max": 80},
             {"id": "decade", "name": "Decade", "dial_min": 81, "dial_max": 100},
+        ],
+    },
+    "talkshow": {
+        "name": "Talk Show",
+        "btn_pin": 6,
+        "led_pin": 22,
+        "subchannels": [
+            {"id": "roundtable", "name": "The Round Table", "dial_min": 0, "dial_max": 100},
+        ],
+    },
+    "dailybrief": {
+        "name": "Daily Brief",
+        "btn_pin": 5,
+        "led_pin": 12,
+        "subchannels": [
+            {"id": "local", "name": "Local News", "dial_min": 0, "dial_max": 20},
+            {"id": "national", "name": "National News", "dial_min": 21, "dial_max": 40},
+            {"id": "world", "name": "World News", "dial_min": 41, "dial_max": 60},
+            {"id": "weather", "name": "Weather", "dial_min": 61, "dial_max": 80},
+            {"id": "traffic", "name": "Traffic", "dial_min": 81, "dial_max": 100},
         ],
     },
     "memos": {

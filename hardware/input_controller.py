@@ -19,11 +19,13 @@ logger = get_logger(__name__)
 class InputEvent:
     event_type: str                # "button_press", "dial_change",
                                     # "volume_change", "callin_start",
-                                    # "callin_stop", "nfc_press"
+                                    # "callin_stop", "nfc_press",
+                                    # "swap_slot"
     channel: str | None = None      # Channel ID for button_press
     dial_position: int = 50         # 0-100 for dial_change
     subchannel: str | None = None   # Resolved subchannel name
     volume: int = 70                # 0-100 for volume_change
+    slot_index: int = -1            # Slot index for swap_slot
 
 
 class InputController:
@@ -41,7 +43,7 @@ class InputController:
         self.callback = callback
         self.dial_position = 50
         self.volume = 70
-        self.active_channel = "dailybrief"
+        self.active_channel = "music"
         self._callin_active = False
         self._use_gpio = False
         self._adc = None
@@ -64,7 +66,7 @@ class InputController:
         pins = self.config["PINS"]
 
         # Channel buttons (4)
-        for pin_name in ["btn_dailybrief", "btn_talkshow", "btn_music", "btn_memos"]:
+        for pin_name in ["btn_music", "btn_talkshow", "btn_dailybrief", "btn_memos"]:
             pin = pins[pin_name]
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             GPIO.add_event_detect(pin, GPIO.FALLING,
@@ -181,10 +183,10 @@ class InputController:
     async def run_keyboard_simulator(self):
         """Keyboard-based input simulator for development without hardware."""
         logger.info("Keyboard simulator started")
-        logger.info("Controls: 1-4=channels, a/d=tune, w/s=volume, c=call-in, n=nfc, q=quit")
+        logger.info("Controls: 1-4=channels, a/d=tune, w/s=volume, c=call-in, n=nfc, 7/8/9=swap slot 0/1/2, q=quit")
 
         loop = asyncio.get_event_loop()
-        channel_keys = {"1": "dailybrief", "2": "talkshow", "3": "music", "4": "memos"}
+        channel_keys = {"1": "music", "2": "talkshow", "3": "dailybrief", "4": "memos"}
 
         while True:
             key = await loop.run_in_executor(None, self._get_key)
@@ -223,6 +225,10 @@ class InputController:
                     self.callback(InputEvent(event_type="callin_stop"))
             elif key == "n":
                 self.callback(InputEvent(event_type="nfc_press"))
+            elif key in ("7", "8", "9"):
+                slot = int(key) - 7
+                logger.info("Swap slot %d requested", slot)
+                self.callback(InputEvent(event_type="swap_slot", slot_index=slot))
 
     @staticmethod
     def _get_key() -> str:

@@ -9,9 +9,9 @@ class LEDController:
     """Manages 6 LEDs: 4 channel indicators + 2 slider indicators."""
 
     CHANNEL_LED_MAP = {
-        "dailybrief": 12,       # GPIO 12, pin 32
-        "talkshow": 22,         # GPIO 22, pin 15
         "music": 23,            # GPIO 23, pin 16
+        "talkshow": 22,         # GPIO 22, pin 15
+        "dailybrief": 12,       # GPIO 12, pin 32
         "memos": 27,            # GPIO 27, pin 13
     }
 

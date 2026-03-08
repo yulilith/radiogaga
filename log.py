@@ -151,6 +151,49 @@ def log_timing(logger: logging.Logger | None = None, label: str = ""):
     return decorator
 
 
+class TranscriptLogger:
+    """Writes JSONL transcripts to logs/ for observability and dry-run evaluation."""
+
+    def __init__(self, log_dir: str = "logs"):
+        self._log_dir = log_dir
+        os.makedirs(log_dir, exist_ok=True)
+        self._logger = get_logger("transcript")
+
+    def _get_file(self):
+        date_str = time.strftime("%Y%m%d")
+        return os.path.join(self._log_dir, f"transcript_{date_str}.jsonl")
+
+    def _write(self, entry: dict):
+        entry["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            with open(self._get_file(), "a") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception as e:
+            self._logger.warning("transcript write failed: %s", e)
+
+    def log_llm_response(self, channel: str, subchannel: str, text: str,
+                         model: str = "", duration_ms: float = 0):
+        self._write({
+            "type": "llm_response",
+            "channel": channel,
+            "subchannel": subchannel,
+            "model": model,
+            "duration_ms": round(duration_ms),
+            "text": text,
+        })
+
+    def log_chunk(self, channel: str, subchannel: str, voice_id: str,
+                  source: str, text: str):
+        self._write({
+            "type": "chunk",
+            "channel": channel,
+            "subchannel": subchannel,
+            "voice_id": voice_id,
+            "source": source,
+            "text": text,
+        })
+
+
 def log_api_call(logger: logging.Logger, service: str, endpoint: str,
                  status: str = "ok", duration_ms: float = 0, **kwargs):
     """Structured log for an external API call.

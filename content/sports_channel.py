@@ -11,11 +11,10 @@ logger = get_logger(__name__)
 class SportsChannel(BaseChannel):
     """Sports radio channel with live scores and commentary."""
 
+    channel_id = "sports"
+
     def channel_name(self) -> str:
         return "Sports"
-
-    def get_voice_id(self, subchannel: str) -> str:
-        return self.config["VOICES"].get("sports_commentator", "TX3LPaxmHKxFdv7VOQHJ")
 
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         # Sports-specific context
@@ -34,6 +33,8 @@ class SportsChannel(BaseChannel):
 CHANNEL: Sports Radio - {sport_name}
 VOICE STYLE: Energetic sports commentator. Passionate, knowledgeable, opinionated.
 
+{self.get_session_guidance(subchannel)}
+
 LIVE SCORES / RECENT RESULTS:
 {scores_str}
 
@@ -48,28 +49,24 @@ INSTRUCTIONS:
 - Keep to ~100-120 words per segment
 """
 
-    async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
-        """Override to fetch sport-specific scores before generating."""
-        # Fetch fresh scores for this specific sport
+    async def get_prompt_context(self, subchannel: str) -> dict:
         logger.info("fetching sport-specific scores", extra={"sport": subchannel})
         scores = await get_scores(subchannel)
-        logger.info("scores fetched", extra={"sport": subchannel, "score_count": len(scores) if scores else 0})
+        logger.info(
+            "scores fetched",
+            extra={"sport": subchannel, "score_count": len(scores) if scores else 0},
+        )
+        ctx = await self.context.get_context()
+        ctx["live_scores"] = [s["summary"] for s in scores] if scores else []
+        logger.debug(
+            "context enriched with sport scores",
+            extra={"sport": subchannel, "score_count": len(ctx["live_scores"])},
+        )
+        return ctx
 
-        # Update context with sport-specific scores
-        original_get_context = self.context.get_context
-
-        async def enriched_context():
-            ctx = await original_get_context()
-            ctx["live_scores"] = [s["summary"] for s in scores] if scores else []
-            logger.debug("context enriched with sport scores", extra={"sport": subchannel, "score_count": len(ctx["live_scores"])})
-            return ctx
-
-        self.context.get_context = enriched_context
-        try:
-            async for chunk in super().stream_content(subchannel):
-                yield chunk
-        finally:
-            self.context.get_context = original_get_context
+    async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
+        async for chunk in super().stream_content(subchannel):
+            yield chunk
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
         """Sports host responds to a caller's hot take."""
