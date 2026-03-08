@@ -22,11 +22,11 @@ CHANNELS = {
         "btn_pin": 6,
         "led_pin": 22,
         "subchannels": [
-            {"id": "tech", "name": "Tech Talk", "dial_min": 0, "dial_max": 20},
-            {"id": "popculture", "name": "Pop Culture", "dial_min": 21, "dial_max": 40},
-            {"id": "philosophy", "name": "Philosophy", "dial_min": 41, "dial_max": 60},
-            {"id": "comedy", "name": "Comedy", "dial_min": 61, "dial_max": 80},
-            {"id": "advice", "name": "Advice Column", "dial_min": 81, "dial_max": 100},
+            {"id": "tech", "name": "Tech Debate", "dial_min": 0, "dial_max": 20},
+            {"id": "popculture", "name": "Culture Debate", "dial_min": 21, "dial_max": 40},
+            {"id": "philosophy", "name": "Philosophy Debate", "dial_min": 41, "dial_max": 60},
+            {"id": "comedy", "name": "Comedy Debate", "dial_min": 61, "dial_max": 80},
+            {"id": "advice", "name": "Life Advice Debate", "dial_min": 81, "dial_max": 100},
         ],
     },
     "music": {

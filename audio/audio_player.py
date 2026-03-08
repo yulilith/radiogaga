@@ -20,19 +20,39 @@ class AudioPlayer:
 
     def __init__(self):
         self.pa = pyaudio.PyAudio()
-        self.stream = self.pa.open(
+        device_index = self._find_output_device()
+        open_kwargs = dict(
             format=self.FORMAT,
             channels=self.CHANNELS,
             rate=self.SAMPLE_RATE,
             output=True,
             frames_per_buffer=self.CHUNK_SIZE,
         )
+        if device_index is not None:
+            open_kwargs["output_device_index"] = device_index
+        self.stream = self.pa.open(**open_kwargs)
         self.audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self._playing = False
         self._play_thread: threading.Thread | None = None
         self._volume = 0.7  # 0.0 to 1.0
         self._muted = False
         self._last_underrun_log: float = 0.0  # rate-limit underrun warnings
+
+    def _find_output_device(self) -> int | None:
+        """Find the first available output device, preferring non-HDMI."""
+        hdmi_indices = []
+        for i in range(self.pa.get_device_count()):
+            info = self.pa.get_device_info_by_index(i)
+            if info.get("maxOutputChannels", 0) > 0:
+                name = info.get("name", "").lower()
+                logger.info("Found output device %d: %s", i, info.get("name"))
+                if "hdmi" in name:
+                    hdmi_indices.append(i)
+                else:
+                    return i  # Prefer non-HDMI (USB audio, headphone jack, etc.)
+        if hdmi_indices:
+            return hdmi_indices[0]  # Fall back to first HDMI
+        return None
 
     @property
     def volume(self) -> float:
