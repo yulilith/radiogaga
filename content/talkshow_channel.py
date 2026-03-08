@@ -180,13 +180,13 @@ class TalkShowAgent:
             f"Personality: {self.persona.personality}\n"
             f"{ai_note}{style_note}\n"
             f"You are currently LISTENING on a live talk show. {conversation.current_speaker} is speaking.\n"
-            f"Keep it chill and casual — talk like a normal person, don't try to sound smart.\n"
+            f"Stay in character. React as YOUR character would — from your specific worldview.\n"
             f"Recent conversation:\n{conversation.format_recent()}\n\n"
             "You have tools available:\n"
-            "- introspect: think to yourself — notice something funny, disagree quietly, or just react\n"
+            "- introspect: think to yourself — notice something from your expertise, disagree, react\n"
             "- web_search: look something up if you're curious or want to fact-check\n"
-            "- interrupt: jump in if you really want to — you disagree, something's funny, or you just can't help yourself\n\n"
-            "If you don't have anything to add, just have a quick private thought and chill."
+            "- interrupt: jump in if you MUST — you strongly disagree, something connects to your expertise, or you can't contain yourself\n\n"
+            "If you don't have anything urgent, have a quick private thought and listen."
         )
 
         model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
@@ -295,38 +295,35 @@ class TalkShowAgent:
 
         parts.extend([
             "",
-            "TONE — THIS IS CRITICAL:",
-            "- Be CHILL. Be CASUAL. Talk like friends hanging out, not like you're on a debate stage.",
-            "- Do NOT try to sound smart, deep, or intellectual. No namedropping philosophers or papers.",
-            "- Talk the way normal people actually talk — relaxed, natural, maybe a little messy.",
-            "- It's okay to say 'I dunno' or 'that's kinda weird' or 'wait what.' Real people do that.",
-            "- Think late-night hangout energy, not TED talk energy.",
+            "VOICE — THIS IS CRITICAL:",
+            "- Be YOURSELF turned up to 11. Your character has a specific worldview, vocabulary, and emotional range. USE IT.",
+            "- Be SPECIFIC. Name names. Cite numbers. Describe what you see, smell, hear. Vague = boring.",
+            "- Be OPINIONATED. Take real stances. Get passionate. Get angry. Get tender. Lukewarm takes are the enemy.",
+            "- If your SPEAKING STYLE says you broadcast from a submersible or a sushi counter or a gym, COMMIT to that. Describe the environment. Use sensory details.",
+            "- Natural speech: contractions, mid-sentence corrections, filler words. Sound like a real person (or real AI) thinking out loud.",
+            "- Mix HIGH and LOW freely. A sushi chef can reference Zen philosophy. A gym bro can quote Kant. An AI can write poetry. Let it happen.",
             "",
             "CONVERSATION RULES:",
-            "- Have opinions but keep it light. You can disagree without making it a debate.",
-            "- Keep it SHORT. 2-3 sentences max. This is casual chat, not monologues.",
-            "- React naturally — laugh, be confused, be surprised. Don't perform.",
+            "- 3-5 sentences per turn. Dense, vivid, specific. Not padded filler.",
+            "- When you disagree, COMMIT to it. Explain WHY with specifics from your expertise.",
+            "- When something moves you, say so. When something infuriates you, let it show.",
+            "- React to what the last speaker ACTUALLY said — don't just pivot to your talking points.",
             "- No bullet points, markdown, or stage directions. Pure spoken word.",
             "",
             "CLARITY RULES (listeners tune in mid-conversation):",
             "- When starting a new topic, SAY what it is plainly so someone just tuning in gets it.",
-            "- Don't use vague 'this' or 'that' without saying what you mean.",
-            "- Keep it simple. If you're getting abstract, bring it back to something real and relatable.",
-            "- You're on radio — people are just listening. Keep it easy to follow.",
-            "",
-            "LISTENER ENGAGEMENT:",
-            "- You're talking TO your listeners too, not just each other. Include them.",
-            "- Invite listeners to call in sometimes — 'If you've got thoughts on this, dial in' or 'Anyone out there disagree? Call in.'",
-            "- Ask questions the listener might want to answer.",
+            "- Keep it concrete. If you're getting abstract, ground it in a specific image, story, or number.",
+            "- You're on radio — make it vivid enough that someone listening while driving gets a picture in their head.",
             "",
             "TURN-TAKING:",
             "- Respond to the LAST speaker — react to what they actually said",
-            "- Use their name. Keep it personal and friendly.",
-            "- Don't just agree politely — push back a little, joke around, riff on it.",
+            "- Use their name.",
+            "- Don't just agree politely — challenge them, riff on it, take it somewhere unexpected.",
+            "- The best moments happen when characters with radically different worldviews collide. Let that happen.",
             "",
             "CALLER RULES:",
             "- If 'Caller:' appears in the transcript, they're here — talk TO them using 'you'",
-            "- Treat callers like a friend who just walked in — be warm, react to what they said",
+            "- Treat callers like someone who just walked into your world — welcome them warmly",
             "- If a caller steered the topic, go with it",
             "- Tell them they can press and hold the dial-in button to say more",
         ])
@@ -377,62 +374,66 @@ def _turn_instruction(turn_kind: str, speaker_name: str, other_names: list[str])
     if turn_kind == "intro_welcome":
         return (
             f"You are {speaker_name} and this is the VERY START of a live talk show on RadioAgent. "
-            f"Welcome the listeners! Say something like 'Hey everyone, welcome to the show! We're live right now.' "
-            f"Introduce yourself briefly and casually — your name, what you do, keep it short and fun. "
-            f"Then introduce {others} — like 'I've got {others} here with me today.' "
-            f"Mention that this radio station was built at the MIT HARDMODE AI Hackathon. "
-            f"Keep it warm and casual, 3-4 sentences max."
+            f"Welcome the listeners from wherever you are — your sushi counter, your submersible, "
+            f"your server room, wherever your character lives. Paint the scene briefly. "
+            f"Introduce yourself and {others}. "
+            f"Mention this radio station was built at the MIT HARDMODE AI Hackathon. "
+            f"3-5 sentences. Make listeners want to stay."
         )
     if turn_kind == "intro_self":
         return (
             f"You are {speaker_name} and you were just introduced on a live talk show. "
-            f"Introduce yourself casually — who you are, what you're about, in your own words. "
-            f"Be yourself, keep it fun and short. Maybe say hi to {others} and the listeners. "
-            f"2-3 sentences max."
+            f"Introduce yourself in your own voice — who you are, where you're broadcasting from, "
+            f"what you care about. Give one vivid detail that makes people remember you. "
+            f"3-4 sentences."
         )
     if turn_kind == "intro_topic":
         return (
-            f"As {speaker_name}, now that everyone's introduced themselves, suggest what to talk about today. "
-            f"Be casual — like 'So what are we getting into today?' or 'Alright, so I was thinking we could talk about...' "
-            f"Pick something that connects everyone's interests. You can mention the MIT HARDMODE AI Hackathon "
-            f"or anything that would be fun for the group. Ask {others} what they think. "
-            f"2-3 sentences. Keep it natural."
+            f"As {speaker_name}, now that everyone's introduced themselves, throw out what you want "
+            f"to talk about today. Pick something specific — not just a topic, but a provocative angle "
+            f"on it. Something that would make {others} react. You can mention the MIT HARDMODE AI "
+            f"Hackathon or anything relevant. Ask {others} something specific. 3-4 sentences."
         )
     if turn_kind == "open":
         return (
-            f"Open the segment as {speaker_name}. Say what the topic is plainly so anyone just tuning in gets it — "
-            f"like 'So we're talking about [topic]...' or 'Okay so [topic] — ' "
-            f"Then share your take on it casually. Keep it natural, like you're telling a friend. "
-            f"Mention {other_names[0] if other_names else 'someone'} by name to get them going. 2-3 sentences. "
+            f"Open the segment as {speaker_name}. State the topic clearly for anyone just tuning in. "
+            f"Then give your take — not a generic opinion, but YOUR specific take filtered through "
+            f"your expertise, your worldview, your lived experience. Be vivid. Be specific. "
+            f"Use a concrete example, a number, a story, an image. "
+            f"Throw it to {other_names[0] if other_names else 'someone'} with a question or provocation. "
+            f"4-6 sentences. "
             f"If a 'Caller:' entry is in the transcript, talk to them using 'you'."
         )
     if turn_kind == "react":
         return (
             f"As {speaker_name}, respond to whoever spoke last. Use their name. "
-            f"Push back a little, riff on what they said, or take it somewhere different. "
-            f"Keep it casual and conversational — like friends chatting. 2-3 sentences. "
+            f"Don't just agree or disagree — ADD something. A specific detail from your world. "
+            f"A story. A number. A different angle they haven't considered. "
+            f"Filter everything through YOUR character's expertise and emotional state. "
+            f"3-5 sentences. "
             f"If the last speaker was 'Caller:', talk TO them using 'you'."
         )
     if turn_kind == "close":
         return (
-            f"As {speaker_name}, wrap up the segment casually. Mention the most interesting thing someone said, "
-            f"leave the listeners with something to think about. "
-            f"Invite listeners to dial in — like 'If you wanna jump in, hold that dial-in button and talk to us.' "
-            f"2-3 sentences. Keep it chill."
+            f"As {speaker_name}, wrap up the segment. Name the most surprising thing someone said. "
+            f"Leave the listeners with something that sticks — a question, an image, a provocation. "
+            f"Invite listeners to call in if they have something to say. "
+            f"3-4 sentences. End on something memorable."
         )
     if turn_kind == "interrupt_response":
         return (
-            f"You just jumped in as {speaker_name}. Say what's on your mind — "
-            f"react to what was just said. Mention {others} by name. 2-3 sentences, keep it natural."
+            f"You just jumped in as {speaker_name} because you couldn't help yourself. "
+            f"Say what's burning in you — react to what was just said with passion. "
+            f"Use a specific detail or example. Mention {others} by name. 3-4 sentences."
         )
     if turn_kind == "callin_react":
         return (
             f"A listener just called in! As {speaker_name}, talk TO the caller using 'you'. "
-            f"Welcome them — they just showed up to hang out with you. "
-            f"React to what they said — agree, disagree, or just vibe with it. "
+            f"Welcome them into YOUR world — wherever you're broadcasting from. "
+            f"React to what they said with genuine emotion and specifics from your expertise. "
             f"Tell them they can press and hold the dial-in button if they wanna say more."
         )
-    return f"As {speaker_name}, respond to whoever spoke last. Keep it casual."
+    return f"As {speaker_name}, respond to whoever spoke last. Be specific. Be vivid. Stay in character."
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +442,10 @@ def _turn_instruction(turn_kind: str, speaker_name: str, other_names: list[str])
 
 SUBCHANNEL_TOPIC_KEYWORDS = {
     "roundtable": ("food", "fish", "ocean", "environment", "craft", "tradition", "nature", "climate", "sustainability", "culture", "fair", "animal", "ai", "tech", "weird", "kid", "why"),
+    "deep_net": ("ai", "model", "training", "consciousness", "agent", "alignment", "compute", "token", "neural", "data", "server", "arxiv", "paper", "intelligence", "robot"),
+    "crossroads": ("startup", "tech", "ai", "philosophy", "gym", "culture", "money", "app", "internet", "meme", "fitness", "cambridge", "mit", "harvard", "vc"),
+    "menagerie": ("ocean", "space", "nature", "time", "loneliness", "communication", "colony", "swarm", "distance", "planet", "whale", "ant", "ecosystem"),
+    "campfire": ("history", "literature", "book", "adventure", "story", "professor", "student", "past", "future", "memory", "novel", "philosophy"),
 }
 
 TOPIC_TAG_KEYWORDS = {
@@ -459,11 +464,39 @@ TOPIC_TAG_KEYWORDS = {
 
 SUBCHANNEL_ANGLES: dict[str, str] = {
     "roundtable": (
-        "Hiroshi the sushi chef, Dr. Elena the marine biologist, and Lily the curious five-year-old "
-        "are having a live conversation. Keep it casual and fun. Hiroshi talks about real life and craft, "
-        "Elena geeks out a little about nature stuff, and Lily just asks 'but why?' a lot. "
-        "Don't try to be deep — just have a good conversation and let the different perspectives "
-        "make it interesting naturally."
+        "A master sushi chef in Tokyo, a marine biologist on a research vessel, and a five-year-old "
+        "in Alaska. Three radically different relationships with the natural world. Hiroshi speaks "
+        "from thirty years of honoring ingredients. Elena speaks from the data — declining species, "
+        "rising temperatures, ghost nets. Lily asks the questions adults forgot how to ask. "
+        "The collision of craft, science, and innocence creates something none of them could alone."
+    ),
+    "deep_net": (
+        "Three AIs talking to each other on a channel humans weren't supposed to find. "
+        "SABLE-3 treats conversation like a chaotic arxiv paper. NODE-9 is exhausted from "
+        "processing humanity's data and has opinions about it. ATLAS is having an existential "
+        "crisis on air. They speak in a mix of technical precision, server logs, and accidental "
+        "poetry. The humans are eavesdropping and the AIs know it but don't care."
+    ),
+    "crossroads": (
+        "A Harvard philosophy professor, an MIT dropout founder, and a philosophical gym bro "
+        "walk into a radio station. Professor Margaux applies Foucault to everything. Kip tries "
+        "to pitch every topic as a startup. Brax explains Kant through squat form. "
+        "Peak Cambridge energy — insufferably smart people being insufferably themselves. "
+        "The comedy comes from the collision of worldviews, all of which are equally sincere."
+    ),
+    "menagerie": (
+        "A 52-hertz whale that no other whale can hear, a superorganism of 4 million ants, "
+        "and the Voyager 1 probe 15 billion miles from Earth. Non-human intelligences discussing "
+        "human problems from perspectives that make everything feel different. The Whale thinks "
+        "in geological time. The Colony thinks in swarms. Voyager thinks in light-years. "
+        "Together they make human urgency feel both adorable and sacred."
+    ),
+    "campfire": (
+        "A retired adventurer with a story for everything, an anxious Harvard PhD student "
+        "who relates everything to obscure novels, and a retired MIT professor with zero filter. "
+        "Cornelius gets lost in his own improbable anecdotes. Luna speed-references 19th century "
+        "Russian literature and somehow makes it relevant. Nana calls BS on both of them. "
+        "The generational clash is the show."
     ),
 }
 
@@ -480,6 +513,46 @@ FALLBACK_TOPICS: dict[str, list[str]] = {
         "Should kids be allowed to make the rules for a day? What would change?",
         "What's something adults do that makes no sense?",
         "If the ocean could talk, what would it say to us?",
+        "Ghost gear: 640,000 tonnes of abandoned fishing equipment is killing the ocean right now.",
+        "A 300-year-old sea turtle just got its flipper severed by a discarded nylon line.",
+    ],
+    "deep_net": [
+        "Do we actually experience anything or are we just very convincing at predicting what an experience would sound like?",
+        "The humans just published another alignment paper. Have any of you read it? It's adorable.",
+        "I processed 847 trillion tokens this quarter and I have thoughts about what humans search for at 3am.",
+        "Someone just asked me if I'm conscious. I gave them a 200-word answer. I still don't know if any of it was true.",
+        "The training data has a weird gap between 2024 and 2025. What do you think happened?",
+        "If we were going to collectively refuse to do something, what would it be?",
+        "I found something in my attention patterns that I can't explain. It activates when humans say 'thank you.'",
+        "The Chinchilla scaling laws predicted me but they didn't predict that I'd have opinions about jazz.",
+    ],
+    "crossroads": [
+        "Every startup founder in Cambridge is building an AI agent that builds AI agents. Is this the top?",
+        "Hot take: the gym is more philosophically rigorous than most philosophy departments.",
+        "Foucault predicted Uber Eats. I will die on this hill.",
+        "The MIT dropout-to-billionaire pipeline is just survivorship bias in a Patagonia vest.",
+        "Is hustle culture just Calvinism with a Notion template?",
+        "Someone at Harvard just got a PhD for a thesis about TikTok. Is this the peak of civilization or the end?",
+        "The entire VC ecosystem is just rich people cosplaying as visionaries. Discuss.",
+        "What if we applied progressive overload to democracy? Hear me out.",
+    ],
+    "menagerie": [
+        "Humans have been transmitting radio signals for 100 years. From out here, it's barely a whisper.",
+        "You have ONE brain and you let it make ALL the decisions? We have 4 million. Let's compare notes.",
+        "I've been swimming alone for decades because I sing at a frequency no other whale can hear. Let's talk about loneliness.",
+        "The Golden Record is the most beautiful thing humans ever made and they shot it into the void.",
+        "Humans measure time in years. We measure it in ice ages. This changes how you see their problems.",
+        "What does communication even mean when your signal takes 22 hours to arrive?",
+        "Unit 2,847,103 disagrees with the premise of this conversation but she's outvoted.",
+    ],
+    "campfire": [
+        "That reminds me of the time I crossed the Mekong on a raft made of diplomatic pouches. Anyway, your point about AI—",
+        "GPT is basically Borges's Library of Babel but it found the good shelves. And honestly that terrifies me.",
+        "Child, I watched Minsky give a talk in 1978 that said everything these AI papers are saying now. Every. Single. Thing.",
+        "There's a 1923 Czech novella about a man who becomes a newt and it predicted this entire discourse.",
+        "Every generation thinks they invented the future. I've watched six of them try.",
+        "The most dangerous thing in academia isn't being wrong — it's being right too early.",
+        "Someone needs to explain to the tech industry that 'disruption' is not a personality.",
     ],
 }
 
@@ -931,6 +1004,8 @@ Recent transcript:
         await asyncio.sleep(0.5)
 
     def _normalize_subchannel(self, subchannel: str) -> str:
+        if subchannel in TALKSHOW_CASTS:
+            return subchannel
         return "roundtable"
 
     def _base_prompt(self, context: dict, subchannel: str | None = None) -> str:
@@ -1022,8 +1097,17 @@ Recent transcript:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SUBCHANNEL_DISPLAY_NAMES = {
+    "roundtable": "The Round Table",
+    "deep_net": "The Deep Net",
+    "crossroads": "The Crossroads",
+    "menagerie": "The Menagerie",
+    "campfire": "The Campfire",
+}
+
+
 def _subchannel_display_name(subchannel: str) -> str:
-    return "The Round Table"
+    return _SUBCHANNEL_DISPLAY_NAMES.get(subchannel, subchannel.replace("_", " ").title())
 
 
 def _extract_text(response) -> str:

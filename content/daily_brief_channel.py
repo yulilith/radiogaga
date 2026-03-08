@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 
 
 class DailyBriefChannel(BaseChannel):
-    """Daily Brief radio channel — news, analysis, and commentary with personality.
+    """Daily Brief radio channel — news, weather, and traffic.
 
     Always-on: LLM generation runs continuously in the background.
     Presence markers are injected into history so the LLM adapts
@@ -39,47 +39,29 @@ class DailyBriefChannel(BaseChannel):
         headlines = context.get("headlines", [])
         headlines_str = "\n".join(f"- {h}" for h in headlines) if headlines else "No headlines available"
 
-        reddit = context.get("reddit_trending", [])
-        reddit_str = "\n".join(f"- {r}" for r in reddit[:3]) if reddit else ""
-
-        google = context.get("google_trends", [])
-        google_str = "\n".join(f"- {g}" for g in google[:3]) if google else ""
-
-        ai_flag = ""
-        if self.persona and getattr(self.persona, "is_ai", False):
-            ai_flag = (
-                "\nYOU ARE AN AI and your audience knows it. Have fun with that! "
-                "Make jokes about it. 'I read 10,000 articles and this is what stuck.' "
-                "Don't be deep about it — just be a goofy AI reading the news."
-            )
-
         subchannel_instructions = {
-            "local": f"""Local news — Cambridge, Boston, the greater Massachusetts area.
-Red Line drama, Harvard Square weirdness, Kendall Square startups, the Charles River.
-Report the actual news but have fun with it. Be the friend who texts you 'omg did you see this.'""",
+            "local": f"""You are reporting LOCAL news for {context.get('city', 'your area')}.
+Focus on stories relevant to {context.get('city', 'the local area')}, {context.get('state', '')}.
+Reference local weather, traffic patterns, and community events.""",
 
-            "national": """National news, but keep it light and fun.
-Report what actually happened, then give your silly take on it.
-Don't be a pundit — be the friend who makes you laugh while catching you up on the news.
-When covering politics, make fun of everyone equally.""",
+            "national": """You are reporting NATIONAL news.
+Cover major stories affecting the country. Reference trending topics.""",
 
-            "world": """World news for people who care but don't want to be depressed about it.
-Report the real stuff — geopolitics, tech, science, climate — but find the funny or weird angle.
-Connect it to Cambridge life when you can. Keep it breezy.""",
+            "world": """You are reporting WORLD news.
+Cover international stories, geopolitics, and global trends.""",
 
-            "weather": f"""Weather for Cambridge/Boston — but make it genuinely fun.
+            "weather": f"""You are a weather reporter for {context.get('city', 'your area')}.
 Current conditions: {context.get('weather', 'unavailable')}
 Forecast: {context.get('forecast', 'unavailable')}
 Sunrise: {context.get('sunrise', 'N/A')}, Sunset: {context.get('sunset', 'N/A')}
-Talk about it like you're texting a friend: 'Okay so it's gonna rain, RIP to everyone biking across the Harvard Bridge.'
-Throw in a random fun fact if one comes to mind.""",
+Give a detailed, conversational weather report. Reference outdoor plans, commute advice, what to wear.""",
 
-            "traffic": f"""Cambridge/Boston transit and traffic update.
-Time: {context.get('current_datetime', '')}
-Day: {context.get('day_of_week', '')}
-Weather: {context.get('weather', '')}
-The Red Line is always broken, someone always hits a bridge on Storrow Drive, and parking near MIT is a myth.
-Make traffic reporting actually entertaining. Be dramatic about it. Have fun.""",
+            "traffic": f"""You are a traffic reporter for {context.get('city', 'your area')}.
+Generate plausible traffic conditions based on:
+- Time: {context.get('current_datetime', '')}
+- Day: {context.get('day_of_week', '')}
+- Weather: {context.get('weather', '')}
+Reference major highways, intersections, and commute patterns typical for {context.get('city', 'a major city')}.""",
         }
 
         specific = subchannel_instructions.get(subchannel, subchannel_instructions["local"])
@@ -105,50 +87,33 @@ HARD MODE: Hardware x AI Hackathon at MIT Media Lab (March 6-8, 2026)
   - Feel free to speculate about what wild projects people are building, who's pulling all-nighters, who's 3D printing something ridiculous at 4am, etc. This is a pirate radio station — gossip is encouraged.
 """
 
-        trending_section = ""
-        if reddit_str or google_str:
-            trending_section = "\nTRENDING RIGHT NOW:"
-            if reddit_str:
-                trending_section += f"\nReddit:\n{reddit_str}"
-            if google_str:
-                trending_section += f"\nGoogle Trends:\n{google_str}"
-
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: Daily Brief - {subchannel.title()}
 YOUR NAME: {self.persona.name if self.persona else 'News Anchor'}
-YOUR PERSONALITY: {self.persona.personality if self.persona else 'Chill, funny news anchor who makes the news actually enjoyable.'}
-{ai_flag}
-Stay in character but keep it LIGHT and FUN.
+YOUR PERSONALITY: {self.persona.personality if self.persona else 'Professional news anchor. Authoritative but warm.'}
+Stay in character. Filter everything through your personality.
 
 {specific}
 
 CURRENT HEADLINES:
 {headlines_str}
-{trending_section}
 {pinned_event}
 
 PRESENCE PROTOCOL:
 You may see "[system: listener tuned in ...]" or "[system: listener tuned away ...]"
-messages in the conversation. When the listener returns, welcome them back casually
-and pick up with something new. When they leave, keep generating — they may return.
-
-TONE — THIS IS CRITICAL:
-- You are a CHILL, FUNNY news anchor. Think: your funniest friend reading you the news.
-- Report the REAL news accurately, but then riff on it. Be silly. Be lighthearted.
-- Don't be a serious journalist. Be the person who makes the news fun to listen to.
-- Talk like a normal person. Contractions, casual language, the occasional 'honestly' or 'like'.
-- It's okay to laugh at the absurdity of things. Find what's funny or weird about a story.
-- Late-night comedy energy, not morning news anchor energy.
+messages in the conversation. When the listener returns, welcome them back naturally
+(e.g. "Welcome back..." or "Glad you're still with us...") and pick up where you left off.
+When they leave, just keep generating content normally — they may return at any time.
 
 INSTRUCTIONS:
-- Open with your name and channel only on the first segment
-- Pick the most INTERESTING or WEIRD headline, not just the first one
-- Report what actually happened in 1-2 sentences, then give your casual take on it
-- Close with something funny or a question that'll stick with people
-- Use real headlines. Hedge naturally when unsure ("apparently," "from what I'm reading")
+- Open with: "This is [subchannel name] on RadioAgent" (only on first segment)
+- Lead story: 3-5 sentences on the most relevant headline. Be SPECIFIC. Give numbers, names, vivid details.
+- Filter the news through YOUR personality. If you're an AI, notice what an AI would notice. If you're skeptical, be skeptical. If something makes you angry or excited, SAY SO.
+- Secondary item: 2-3 sentences. Find the weird angle, the human detail, the thing nobody else noticed.
+- Close with something that sticks — a question, a provocation, an observation that reframes everything.
+- Use real headlines from above. For details you're unsure about, say "reports suggest" or "sources indicate"
 - NEVER fabricate specific statistics or direct quotes
-- ~80-100 words per segment. Keep it snappy.
-- If headlines are thin, riff on trending topics or find something weird to talk about
+- Keep to ~120-180 words per segment. Dense, vivid, not padded.
 """
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
@@ -158,13 +123,12 @@ INSTRUCTIONS:
         voice_id = self.get_voice_id("")
 
         prompt = self.get_system_prompt("local", ctx) + f"""
-A listener just called in and said:
+A listener has called in with this question or comment:
 "{transcript}"
 
-Respond as {self.persona.name if self.persona else 'the anchor'}. Be casual and friendly —
-like a friend responding to a friend. React to what they said, riff on it, maybe joke around.
-Then get back to the news naturally.
-Keep it under 60 words. Stay chill.
+Respond in character as {self.persona.name if self.persona else 'the anchor'}. Acknowledge their point, provide context
+from the headlines you know about, and smoothly return to the broadcast.
+Keep response under 80 words.
 """
         messages = [
             *self.history,

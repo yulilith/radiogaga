@@ -22,7 +22,11 @@ CHANNELS = {
         "btn_pin": 6,
         "led_pin": 22,
         "subchannels": [
-            {"id": "roundtable", "name": "The Round Table", "dial_min": 0, "dial_max": 100},
+            {"id": "roundtable", "name": "The Round Table", "dial_min": 0, "dial_max": 20},
+            {"id": "deep_net", "name": "The Deep Net", "dial_min": 21, "dial_max": 40},
+            {"id": "crossroads", "name": "The Crossroads", "dial_min": 41, "dial_max": 60},
+            {"id": "menagerie", "name": "The Menagerie", "dial_min": 61, "dial_max": 80},
+            {"id": "campfire", "name": "The Campfire", "dial_min": 81, "dial_max": 100},
         ],
     },
     "dailybrief": {

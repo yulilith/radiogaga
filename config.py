@@ -25,7 +25,7 @@ CONFIG = {
 
     # LLM Settings
     "LLM_MODEL": "claude-opus-4-6",
-    "LLM_MAX_TOKENS": 300,
+    "LLM_MAX_TOKENS": 450,
     "LLM_TEMPERATURE": 0.85,
 
     # TTS Settings
@@ -47,10 +47,9 @@ CONFIG = {
     "VOICES": {
         "dj":                 "iP95p4xoKVk53GoZ742B",   # Chris — DJ Spark
         "wacky_gymbro":       "IKne3meq5aSn9XLyUdCD",   # Charlie — Brax Ironclad
-        "wacky_conspiracy":   "y0SYydk17lMbUIUvSf3N",   # AK British Posh — Dr. Elena
-        "wacky_grandpa":      "xKhbyU7E3bC6T89Kn26c",   # Adam Spencer — Hiroshi
-        "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily (generic, unused)
-        "kid_lily":           "wGcFBfKz5yUQqhqr0mVy",   # Maria Moody — Lily the kid
+        "wacky_conspiracy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura — Tiffany Cosmos
+        "wacky_grandpa":      "pqHfZKP75CvOlQylNhV4",   # Bill — Cornelius Thatch
+        "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily — Sable Nightshade
         "wacky_techbro":      "N2lVS1w4EtoT3dr4eOWO",   # Callum — Jax Wirecutter
         "wacky_grandma":      "cgSgspJ2msm6clMCkdW9",   # Jessica — Peggy Butterworth
         "wacky_weather":      "SOYHLrjzK2X1ezoPC6cr",   # Harry — Captain Rick Stormborn
