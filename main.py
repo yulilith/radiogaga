@@ -54,7 +54,12 @@ class RadioAgent:
             openai_key=CONFIG.get("OPENAI_API_KEY"),
             speed=CONFIG.get("TTS_SPEED", 1.1),
         )
-        self.stt = STTService(openai_key=CONFIG.get("OPENAI_API_KEY"))
+        self.stt = STTService(
+            deepgram_key=CONFIG.get("DEEPGRAM_API_KEY"),
+            model=CONFIG.get("DEEPGRAM_MODEL", "nova-3"),
+        )
+        if not CONFIG.get("DEEPGRAM_API_KEY"):
+            logger.warning("DEEPGRAM_API_KEY not set, call-in transcription is unavailable")
         self.player = AudioPlayer()
 
         # Spotify (optional)
@@ -254,7 +259,12 @@ class RadioAgent:
             return
 
         logger.info("Transcribing call-in...")
-        transcript = await self.stt.transcribe(audio_bytes, format="wav")
+        try:
+            transcript = await self.stt.transcribe(audio_bytes, format="wav")
+        except Exception as e:
+            logger.error("Call-in transcription failed: %s", e)
+            self.leds.set_callin(False)
+            return
         logger.info("Caller said: %s", transcript)
         self.leds.set_callin(False)
 

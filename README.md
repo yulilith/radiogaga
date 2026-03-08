@@ -223,6 +223,7 @@ Required variables:
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude API key for LLM generation |
 | `ELEVENLABS_API_KEY` | ElevenLabs API key for TTS |
+| `DEEPGRAM_API_KEY` | Deepgram API key for call-in transcription |
 | `SPOTIFY_CLIENT_ID` | Spotify app client ID |
 | `SPOTIFY_CLIENT_SECRET` | Spotify app client secret |
 | `SPOTIFY_REDIRECT_URI` | Spotify OAuth redirect (default `http://127.0.0.1:8888/callback`) |
@@ -233,6 +234,7 @@ Optional variables:
 |---|---|
 | `GNEWS_API_KEY` | GNews.io key for news context |
 | `RADIO_ANTHROPIC_MODEL` | Claude model to use (default `claude-haiku-4-5-20251001`) |
+| `RADIO_DEEPGRAM_MODEL` | Deepgram STT model for call-ins (default `nova-3`) |
 | `RADIO_ELEVENLABS_MODEL` | ElevenLabs model (default `eleven_flash_v2_5`) |
 | `RADIO_ELEVENLABS_SPEED` | TTS playback speed (default `1.2`) |
 
@@ -243,6 +245,24 @@ python main.py
 ```
 
 This version is broader than the packaged runtime and is aimed at the full radio-device experience: channels, context, audio, physical inputs, peer radios, and voice call-ins.
+
+### Testing Call-In
+
+For local testing, start on a channel that supports callers:
+
+```bash
+python main.py --channel talkshow
+```
+
+Then:
+
+1. Confirm startup logs show a detected mic such as `Found mic:` or `Using default input:`.
+2. Press `c` to start recording if you are using keyboard controls, or hold the physical call-in button on the device.
+3. Speak for 2 to 5 seconds, then press `c` again or release the button to stop.
+4. Watch for the log sequence `Recording started`, `Recorded ...`, `Transcribing call-in...`, and `Caller said: ...`.
+5. Verify the active host responds to your transcript over the speaker.
+
+If transcription fails, double-check `DEEPGRAM_API_KEY`, make sure the mic is the selected input device, and try again in a quiet room with the mic closer to your mouth.
 
 ## Why This Repo Exists
 
