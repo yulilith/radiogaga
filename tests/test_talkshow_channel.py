@@ -169,7 +169,7 @@ async def test_stream_content_keeps_same_host_for_same_subchannel(config, base_c
     await generator.aclose()
 
 
-def test_reset_clears_talkshow_specific_state(config, base_context):
+def test_reset_preserves_talkshow_specific_state_for_switch_resume(config, base_context):
     channel = build_channel(config, base_context)
     channel.cancel()
     channel._active_subchannel = "popculture"
@@ -182,12 +182,53 @@ def test_reset_clears_talkshow_specific_state(config, base_context):
     channel.reset()
 
     assert channel._cancelled is False
+    assert channel._active_subchannel == "popculture"
+    assert channel._current_topic == {"text": "Celebrity drama", "source": "headline"}
+    assert channel._current_guest == GUEST_PERSONALITIES[0]
+    assert channel._guest_rotation_index == 3
+    assert channel.history == [{"role": "assistant", "content": "Maya Buzz: wild stuff tonight"}]
+    assert channel._turn_history == [TalkTurn(speaker_role="host", speaker_name="Maya Buzz", text="wild stuff tonight")]
+
+
+def test_hard_reset_clears_talkshow_specific_state(config, base_context):
+    channel = build_channel(config, base_context)
+    channel.cancel()
+    channel._active_subchannel = "popculture"
+    channel._current_topic = {"text": "Celebrity drama", "source": "headline"}
+    channel._current_guest = GUEST_PERSONALITIES[0]
+    channel._guest_rotation_index = 3
+    channel.history = [{"role": "assistant", "content": "Maya Buzz: wild stuff tonight"}]
+    channel._turn_history = [TalkTurn(speaker_role="host", speaker_name="Maya Buzz", text="wild stuff tonight")]
+
+    channel.hard_reset()
+
+    assert channel._cancelled is False
     assert channel._active_subchannel == "tech"
     assert channel._current_topic is None
     assert channel._current_guest is None
     assert channel._guest_rotation_index == 0
     assert channel.history == []
     assert channel._turn_history == []
+
+
+@pytest.mark.anyio
+async def test_build_preview_is_safe_and_does_not_mutate_live_state(config, base_context):
+    channel = build_channel(
+        config,
+        base_context,
+        responses=["Host preview opener"],
+    )
+    channel._active_subchannel = "advice"
+    channel._guest_rotation_index = 2
+
+    preview = await channel.build_preview("tech")
+
+    assert preview.text == "Host preview opener"
+    assert preview.voice_id == "voice-host"
+    assert channel._active_subchannel == "advice"
+    assert channel._guest_rotation_index == 2
+    assert channel._current_topic is None
+    assert channel._current_guest is None
 
 
 @pytest.mark.anyio

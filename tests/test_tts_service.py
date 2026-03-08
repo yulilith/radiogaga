@@ -53,3 +53,43 @@ async def test_stream_speech_sends_configured_speed_to_elevenlabs():
     assert chunks == [b"fake-audio"]
     assert captured_request["url"].endswith("/voice-123/stream")
     assert captured_request["payload"]["voice_settings"]["speed"] == 1.2
+
+
+@pytest.mark.anyio
+async def test_synthesize_reuses_cached_audio_for_identical_requests(monkeypatch):
+    service = TTSService(elevenlabs_key="test-key", speed=1.1)
+    calls = []
+
+    async def fake_stream_speech(text, voice_id):
+        calls.append((text, voice_id))
+        yield b"cached-audio"
+
+    monkeypatch.setattr(service, "stream_speech", fake_stream_speech)
+
+    first = await service.synthesize("hello world", "voice-123")
+    second = await service.synthesize("hello world", "voice-123")
+
+    assert first == b"cached-audio"
+    assert second == b"cached-audio"
+    assert calls == [("hello world", "voice-123")]
+
+
+@pytest.mark.anyio
+async def test_synthesize_cache_key_changes_when_voice_changes(monkeypatch):
+    service = TTSService(elevenlabs_key="test-key", speed=1.1)
+    calls = []
+
+    async def fake_stream_speech(text, voice_id):
+        calls.append((text, voice_id))
+        yield f"{voice_id}:{text}".encode()
+
+    monkeypatch.setattr(service, "stream_speech", fake_stream_speech)
+
+    first = await service.synthesize("hello world", "voice-123")
+    second = await service.synthesize("hello world", "voice-456")
+
+    assert first != second
+    assert calls == [
+        ("hello world", "voice-123"),
+        ("hello world", "voice-456"),
+    ]

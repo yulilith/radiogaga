@@ -3,7 +3,7 @@ import time
 from dataclasses import dataclass
 from typing import AsyncGenerator
 
-from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk
+from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk, PreparedPreview
 from log import get_logger, log_api_call
 
 logger = get_logger(__name__)
@@ -149,6 +149,8 @@ SUBCHANNEL_ANGLES = {
 class TalkShowChannel(BaseChannel):
     """Talk Show channel with fixed hosts and a rotating guest per segment."""
 
+    channel_id = "talkshow"
+
     def __init__(self, context_provider, config: dict):
         super().__init__(context_provider, config)
         self._turn_history: list[TalkTurn] = []
@@ -156,6 +158,7 @@ class TalkShowChannel(BaseChannel):
         self._current_topic: dict | None = None
         self._current_guest: GuestPersona | None = None
         self._guest_rotation_index = 0
+        self._pending_segment: dict | None = None
 
     def channel_name(self) -> str:
         return "Talk Show"
@@ -171,7 +174,7 @@ class TalkShowChannel(BaseChannel):
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
         host = self._get_host(subchannel)
         topic = self._pick_talkshow_topic(context, subchannel)
-        return self._base_prompt(context) + f"""
+        return self._base_prompt(context, subchannel) + f"""
 CHANNEL: Talk Show - {host.show}
 HOST NAME: {host.name}
 HOST PERSONALITY: {host.personality}
@@ -180,6 +183,49 @@ CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
 CURRENT SEGMENT TOPIC: {topic['text']}
 SEGMENT ANGLE: {topic['angle']}
 """
+
+    async def build_preview(self, subchannel: str) -> PreparedPreview | None:
+        active_subchannel = self._normalize_subchannel(subchannel)
+        ctx = await self.get_prompt_context(active_subchannel)
+        host = self._get_host(active_subchannel)
+        topic = self._pick_talkshow_topic(ctx, active_subchannel)
+        guest = self._select_guest_persona(topic, active_subchannel, advance_rotation=False)
+        text = await self._generate_turn(
+            speaker=host,
+            counterpart=guest,
+            subchannel=active_subchannel,
+            context=ctx,
+            topic=topic,
+            segment_turns=[],
+            turn_kind="host_open",
+        )
+        return PreparedPreview(
+            text=text,
+            voice_id=self.get_voice_id(active_subchannel),
+            metadata={
+                "topic": topic,
+                "guest": guest,
+            },
+        )
+
+    def commit_preview_playback(self, subchannel: str, preview: PreparedPreview):
+        active_subchannel = self._normalize_subchannel(subchannel)
+        host = self._get_host(active_subchannel)
+        guest = preview.metadata.get("guest")
+        topic = preview.metadata.get("topic")
+        turn = TalkTurn(speaker_role="host", speaker_name=host.name, text=preview.text)
+
+        self._active_subchannel = active_subchannel
+        self._current_topic = topic if isinstance(topic, dict) else None
+        self._current_guest = guest if isinstance(guest, GuestPersona) else None
+        self._guest_rotation_index += 1
+        self._pending_segment = {
+            "subchannel": active_subchannel,
+            "topic": self._current_topic,
+            "guest": self._current_guest,
+            "segment_turns": [turn],
+        }
+        self._remember_turn(turn)
 
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         """Generate a two-person talk show segment with a fixed host and rotating guest."""
@@ -190,10 +236,34 @@ SEGMENT ANGLE: {topic['angle']}
 
         logger.info("talk show stream started", extra={"subchannel": active_subchannel})
         while not self._cancelled:
-            ctx = await self.context.get_context()
+            ctx = await self.get_prompt_context(active_subchannel)
             host = self._get_host(active_subchannel)
-            topic = self._pick_talkshow_topic(ctx, active_subchannel)
-            guest = self._select_guest_persona(topic, active_subchannel, advance_rotation=True)
+            pending_segment = None
+            if self._pending_segment and self._pending_segment.get("subchannel") == active_subchannel:
+                pending_segment = self._pending_segment
+                self._pending_segment = None
+
+            if pending_segment:
+                topic = pending_segment.get("topic") or self._pick_talkshow_topic(ctx, active_subchannel)
+                guest = pending_segment.get("guest") or self._select_guest_persona(
+                    topic,
+                    active_subchannel,
+                    advance_rotation=True,
+                )
+                segment_turns = list(pending_segment.get("segment_turns", []))
+                turns = [
+                    ("guest_reply", guest, host, guest_voice_id, 0.25),
+                    ("host_close", host, guest, host_voice_id, 1.0),
+                ]
+            else:
+                topic = self._pick_talkshow_topic(ctx, active_subchannel)
+                guest = self._select_guest_persona(topic, active_subchannel, advance_rotation=True)
+                segment_turns = []
+                turns = [
+                    ("host_open", host, guest, host_voice_id, 0.25),
+                    ("guest_reply", guest, host, guest_voice_id, 0.25),
+                    ("host_close", host, guest, host_voice_id, 1.0),
+                ]
 
             self._active_subchannel = active_subchannel
             self._current_topic = topic
@@ -209,13 +279,6 @@ SEGMENT ANGLE: {topic['angle']}
                     "topic_preview": topic["text"][:80],
                 },
             )
-
-            segment_turns: list[TalkTurn] = []
-            turns = [
-                ("host_open", host, guest, host_voice_id, 0.25),
-                ("guest_reply", guest, host, guest_voice_id, 0.25),
-                ("host_close", host, guest, host_voice_id, 1.0),
-            ]
 
             for turn_kind, speaker, counterpart, voice_id, pause_after in turns:
                 if self._cancelled:
@@ -246,7 +309,7 @@ SEGMENT ANGLE: {topic['angle']}
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
         """Talk show host responds to a caller in the active subchannel voice."""
-        ctx = await self.context.get_context()
+        ctx = await self.get_prompt_context(self._active_subchannel)
         host = self._get_host(self._active_subchannel)
         topic_text = self._current_topic["text"] if self._current_topic else "whatever the audience is buzzing about today"
         guest_name = self._current_guest.name if self._current_guest else "your guest"
@@ -275,7 +338,7 @@ Respond as {host.name} taking a live call.
 - Do not use bullet points"""
 
         full = await self._complete_text(
-            system_prompt=self._base_prompt(ctx) + f"""
+            system_prompt=self._base_prompt(ctx, self._active_subchannel) + f"""
 CHANNEL: Talk Show - {host.show}
 HOST NAME: {host.name}
 HOST PERSONALITY: {host.personality}
@@ -316,7 +379,10 @@ FORMAT: Live caller interaction on a talk show.
         )
 
     def reset(self):
-        """Reset talk show playback state when tuning or switching channels."""
+        """Reactivate talk show playback without clearing session memory."""
+        super().reset()
+
+    def hard_reset(self):
         super().reset()
         self.clear_history()
         self._turn_history.clear()
@@ -324,6 +390,7 @@ FORMAT: Live caller interaction on a talk show.
         self._current_topic = None
         self._current_guest = None
         self._guest_rotation_index = 0
+        self._pending_segment = None
 
     async def _sleep_between_segments(self):
         await asyncio.sleep(0.5)
@@ -334,8 +401,8 @@ FORMAT: Live caller interaction on a talk show.
     def _normalize_subchannel(self, subchannel: str) -> str:
         return subchannel if subchannel in HOST_PERSONALITIES else "tech"
 
-    def _base_prompt(self, context: dict) -> str:
-        return BASE_SYSTEM_PROMPT.format(
+    def _base_prompt(self, context: dict, subchannel: str | None = None) -> str:
+        prompt = BASE_SYSTEM_PROMPT.format(
             current_datetime=context.get("current_datetime", "Unknown"),
             day_of_week=context.get("day_of_week", "Unknown"),
             city=context.get("city", "Unknown"),
@@ -343,6 +410,9 @@ FORMAT: Live caller interaction on a talk show.
             weather=context.get("weather", "unavailable"),
             trending_topics=context.get("trending_topics", "No trending topics available"),
         )
+        if subchannel:
+            prompt += self.get_session_guidance(subchannel)
+        return prompt
 
     def _pick_talkshow_topic(self, context: dict, subchannel: str) -> dict:
         active_subchannel = self._normalize_subchannel(subchannel)
@@ -440,7 +510,7 @@ Recent transcript:
 {self._turn_instruction(turn_kind, speaker, counterpart)}
 """
 
-        system_prompt = self._base_prompt(context) + f"""
+        system_prompt = self._base_prompt(context, subchannel) + f"""
 CHANNEL: Talk Show - {self._get_host(subchannel).show}
 YOUR ROLE: {speaker_role}
 YOUR NAME: {speaker.name}

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import OrderedDict
 import aiohttp
 from typing import AsyncGenerator
 
@@ -22,6 +23,8 @@ class TTSService:
         self.speed = speed
         self.base_url = "https://api.elevenlabs.io/v1"
         self._use_fallback = False
+        self._audio_cache: OrderedDict[tuple, bytes] = OrderedDict()
+        self._audio_cache_limit = 128
 
     async def stream_speech(
         self, text: str, voice_id: str | None = None
@@ -112,6 +115,13 @@ class TTSService:
 
     async def synthesize(self, text: str, voice_id: str | None = None) -> bytes:
         """Get complete TTS audio as bytes (non-streaming)."""
+        cache_key = self._build_cache_key(text, voice_id)
+        cached = self._audio_cache.get(cache_key)
+        if cached is not None:
+            self._audio_cache.move_to_end(cache_key)
+            logger.debug("TTS cache hit", extra={"voice_id": voice_id, "text_length": len(text)})
+            return cached
+
         chunks = []
         async for chunk in self.stream_speech(text, voice_id):
             chunks.append(chunk)
@@ -119,8 +129,23 @@ class TTSService:
         if not result:
             logger.error("TTS returned empty audio data")
             raise RuntimeError("TTS synthesis returned no audio data")
+        self._audio_cache[self._build_cache_key(text, voice_id)] = result
+        self._audio_cache.move_to_end(self._build_cache_key(text, voice_id))
+        while len(self._audio_cache) > self._audio_cache_limit:
+            self._audio_cache.popitem(last=False)
         logger.info("Synthesis complete", extra={"bytes": len(result)})
         return result
+
+    def _build_cache_key(self, text: str, voice_id: str | None) -> tuple:
+        provider = "openai" if self._use_fallback and self.openai_key else "elevenlabs"
+        return (
+            provider,
+            voice_id or "pNInz6obpgDQGcFmaJgB",
+            text,
+            self.model,
+            self.output_format,
+            self.speed,
+        )
 
     async def _openai_tts(self, text: str, _voice_id: str | None = None) -> AsyncGenerator[bytes, None]:
         """Fallback: OpenAI TTS API."""
