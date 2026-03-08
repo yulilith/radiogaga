@@ -451,8 +451,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-c", "--channel",
         choices=list(CHANNELS.keys()),
-        default="news",
-        help="channel to start on (default: news)",
+        default="dailybrief",
+        help="channel to start on (default: dailybrief)",
     )
     return parser.parse_args()
 
