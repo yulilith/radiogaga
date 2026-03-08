@@ -8,10 +8,31 @@ logger = get_logger(__name__)
 
 
 class DailyBriefChannel(BaseChannel):
-    """Daily Brief radio channel — news, weather, and traffic."""
+    """Daily Brief radio channel — news, weather, and traffic.
+
+    Always-on: LLM generation runs continuously in the background.
+    Presence markers are injected into history so the LLM adapts
+    naturally when the listener tunes in and out.
+    """
 
     def channel_name(self) -> str:
         return "Daily Brief"
+
+    async def on_activate(self):
+        ts = time.strftime("%H:%M:%S")
+        self.history.append({
+            "role": "user",
+            "content": f"[system: listener tuned in at {ts}]",
+        })
+        logger.info("dailybrief.listener_tuned_in", extra={"timestamp": ts})
+
+    async def on_deactivate(self):
+        ts = time.strftime("%H:%M:%S")
+        self.history.append({
+            "role": "user",
+            "content": f"[system: listener tuned away at {ts}]",
+        })
+        logger.info("dailybrief.listener_tuned_away", extra={"timestamp": ts})
 
     def get_voice_id(self, subchannel: str) -> str:
         if subchannel in ("weather", "traffic"):
@@ -58,6 +79,12 @@ VOICE STYLE: Professional news anchor. Authoritative but warm.
 
 CURRENT HEADLINES:
 {headlines_str}
+
+PRESENCE PROTOCOL:
+You may see "[system: listener tuned in ...]" or "[system: listener tuned away ...]"
+messages in the conversation. When the listener returns, welcome them back naturally
+(e.g. "Welcome back..." or "Glad you're still with us...") and pick up where you left off.
+When they leave, just keep generating content normally — they may return at any time.
 
 INSTRUCTIONS:
 - Open with: "This is [subchannel name] on RadioAgent" (only on first segment)

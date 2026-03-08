@@ -9,7 +9,11 @@ logger = get_logger(__name__)
 
 
 class MusicChannel(BaseChannel):
-    """Music channel — curates Spotify tracks with AI DJ banter between songs."""
+    """Music channel — curates Spotify tracks with AI DJ banter between songs.
+
+    On-demand: background task starts when listener enters, stops on leave.
+    Spotify playback is paused/resumed on channel switch. First entry starts fresh.
+    """
 
     def __init__(self, context_provider, config: dict,
                  spotify_service=None, music_manager=None):
@@ -18,9 +22,59 @@ class MusicChannel(BaseChannel):
         self.music_manager = music_manager
         self._current_track: dict | None = None
         self._set_list: list[dict] = []
+        self._first_entry = True
 
     def channel_name(self) -> str:
         return "Music"
+
+    async def on_activate(self):
+        if self._first_entry:
+            self._first_entry = False
+            logger.info("music.first_entry")
+        elif self.spotify:
+            try:
+                await self.spotify.resume()
+                logger.info("music.spotify_resumed")
+            except Exception as e:
+                logger.warning("music.spotify_resume_failed: %s", e)
+
+    async def on_deactivate(self):
+        if self.spotify:
+            try:
+                await self.spotify.pause()
+                logger.info("music.spotify_paused")
+            except Exception as e:
+                logger.warning("music.spotify_pause_failed: %s", e)
+
+    async def generate_warm_preview(self) -> list["ContentChunk"]:
+        ctx = await self.context.get_context()
+        system_prompt = self.get_system_prompt(self._subchannel or "top_tracks", ctx)
+        voice_id = self.get_voice_id(self._subchannel or "top_tracks")
+
+        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+        messages = [
+            *self.history[-4:],
+            {"role": "user", "content": "Generate a short DJ intro."},
+        ]
+
+        banter = ""
+        try:
+            async with self.client.messages.stream(
+                model=model,
+                max_tokens=100,
+                temperature=0.9,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    banter += text
+        except Exception as e:
+            logger.warning("music.warm_preview_failed: %s", e)
+            return []
+
+        if banter.strip():
+            return [ContentChunk(text=banter.strip(), voice_id=voice_id, pause_after=0.5)]
+        return []
 
     def get_voice_id(self, subchannel: str) -> str:
         return self.config["VOICES"].get("dj", "iP95p4xoKVk53GoZ742B")
