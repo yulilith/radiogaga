@@ -137,7 +137,8 @@ class RadioAgent:
             self.player.start_static()
             audio = await self.tts.synthesize(response_text, voice_id)
             self.player.stop_static()
-            self.player.enqueue_mp3(audio)
+            gid = self.player._gen_id
+            await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
             return msg_cohost_response(response_text, voice_id)
         return {"type": "error", "message": "Channel doesn't support co-hosting"}
@@ -152,7 +153,8 @@ class RadioAgent:
             self.player.start_static()
             audio = await self.tts.synthesize(chunk.text, chunk.voice_id)
             self.player.stop_static()
-            self.player.enqueue_mp3(audio)
+            gid = self.player._gen_id
+            await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
         return {"type": "ack"}
 
@@ -216,8 +218,9 @@ class RadioAgent:
                 logger.info("audio_consumer.playing_warm_cache",
                             extra={"channel": self.active_channel, "segments": len(warm)})
                 self.player.stop_static()
+            gid = self.player._gen_id
             for audio in warm:
-                self.player.enqueue_mp3(audio)
+                await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
             while True:
                 self.player.start_static()
@@ -226,7 +229,8 @@ class RadioAgent:
                 if chunk.text:
                     audio_bytes = await self.tts.synthesize(chunk.text, chunk.voice_id)
                     self.player.stop_static()
-                    self.player.enqueue_mp3(audio_bytes)
+                    gid = self.player._gen_id
+                    await asyncio.to_thread(self.player.enqueue_mp3, audio_bytes, gid)
 
                 if chunk.pause_after > 0:
                     await asyncio.sleep(chunk.pause_after)
@@ -272,6 +276,7 @@ class RadioAgent:
             return
 
         old_id = self.active_channel
+        self.active_channel = channel
         logger.info("Switching to: %s", CHANNELS[channel]['name'])
 
         await self._restart_audio_consumer()
@@ -285,7 +290,6 @@ class RadioAgent:
 
         old_ch.set_on_air(False)
 
-        self.active_channel = channel
         self.active_subchannel = resolve_subchannel(channel, self.input.dial_position)
         self.channels[channel].set_subchannel(self.active_subchannel)
         self.leds.activate(channel)
@@ -411,7 +415,8 @@ class RadioAgent:
         self.player.start_static()
         audio = await self.tts.synthesize(announcement, voice_id)
         self.player.stop_static()
-        self.player.enqueue_mp3(audio)
+        gid = self.player._gen_id
+        await asyncio.to_thread(self.player.enqueue_mp3, audio, gid)
 
     def _start_always_on_channels(self):
         """Start background tasks for always-on channels (talkshow, dailybrief)."""

@@ -39,6 +39,7 @@ class FakeAudioPlayer:
         self.audio_queue = queue.Queue(maxsize=100)
         self._volume = 0.7
         self._muted = False
+        self._gen_id = 0
         self.started = False
         self.enqueued_chunks = []
 
@@ -61,6 +62,7 @@ class FakeAudioPlayer:
         self.started = True
 
     def interrupt(self):
+        self._gen_id += 1
         self.clear_buffer()
 
     def start_static(self):
@@ -79,7 +81,7 @@ class FakeAudioPlayer:
     def buffer_level(self):
         return self.audio_queue.qsize()
 
-    def enqueue_mp3(self, mp3_bytes):
+    def enqueue_mp3(self, mp3_bytes, gen_id=None):
         self.enqueued_chunks.append(mp3_bytes)
 
     def play_file(self, path):
