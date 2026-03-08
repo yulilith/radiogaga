@@ -8,7 +8,7 @@ CHANNELS = {
     "music": {
         "name": "Music",
         "btn_pin": 13,
-        "led_pin": 23,
+        "led_pin": 16,
         "subchannels": [
             {"id": "top_tracks", "name": "My Top Tracks", "dial_min": 0, "dial_max": 20},
             {"id": "discover", "name": "Discover", "dial_min": 21, "dial_max": 40},

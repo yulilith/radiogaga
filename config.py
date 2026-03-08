@@ -47,9 +47,10 @@ CONFIG = {
     "VOICES": {
         "dj":                 "iP95p4xoKVk53GoZ742B",   # Chris — DJ Spark
         "wacky_gymbro":       "IKne3meq5aSn9XLyUdCD",   # Charlie — Brax Ironclad
-        "wacky_conspiracy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura — Tiffany Cosmos
-        "wacky_grandpa":      "pqHfZKP75CvOlQylNhV4",   # Bill — Cornelius Thatch
-        "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily — Sable Nightshade
+        "wacky_conspiracy":   "y0SYydk17lMbUIUvSf3N",   # AK British Posh — Dr. Elena
+        "wacky_grandpa":      "xKhbyU7E3bC6T89Kn26c",   # Adam Spencer — Hiroshi
+        "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily (generic, unused)
+        "kid_lily":           "wGcFBfKz5yUQqhqr0mVy",   # Maria Moody — Lily the kid
         "wacky_techbro":      "N2lVS1w4EtoT3dr4eOWO",   # Callum — Jax Wirecutter
         "wacky_grandma":      "cgSgspJ2msm6clMCkdW9",   # Jessica — Peggy Butterworth
         "wacky_weather":      "SOYHLrjzK2X1ezoPC6cr",   # Harry — Captain Rick Stormborn
@@ -61,10 +62,12 @@ CONFIG = {
     #
     # Pin budget (40-pin header):
     #   SPI0  (e-ink + MCP3008 ADC): GPIO 7,8,9,10,11 + 17,24,25
-    #   I2S   (INMP441 mic):         GPIO 18,19,20  (21 reserved for amp)
+    #   I2S   (INMP441 mic):         GPIO 18,19,20
     #   I2C1  (PN532 NFC):           GPIO 2,3
-    #   Buttons (6):                 GPIO 4,5,6,13,16,26
-    #   LEDs   (6):                  GPIO 12,14,15,22,23,27
+    #   Rotary encoders:             GPIO 14,15 (tuning) + GPIO 23,21 (volume)
+    #   Encoder buttons:             GPIO 4 (callin) + GPIO 3 (nfc)
+    #   Channel buttons (4):         GPIO 5,6,13,26
+    #   LEDs (4 channel):            GPIO 12,16,22,27
     # ─────────────────────────────────────────────────────────────
     "PINS": {
         # 4 channel push buttons (active-low, internal pull-up)
@@ -73,19 +76,21 @@ CONFIG = {
         "btn_music": 13,            # pin 33
         "btn_memos": 26,            # pin 37
 
-        # 2 large push buttons
-        "btn_callin": 16,           # pin 36 — press-and-hold to record
-        "btn_nfc": 4,               # pin  7 — press to integrate NFC tag
+        # Rotary encoder push buttons
+        "btn_callin": 4,            # pin  7 — tuning encoder push, press-and-hold to record
+        "btn_nfc": 3,               # pin  5 — volume encoder push, press to integrate NFC tag
+
+        # Rotary encoder rotation pins
+        "enc_tuning_clk": 14,       # pin  8 — tuning encoder CLK
+        "enc_tuning_dt": 15,        # pin 10 — tuning encoder DT
+        "enc_volume_clk": 23,       # pin 16 — volume encoder CLK
+        "enc_volume_dt": 21,        # pin 40 — volume encoder DT
 
         # 4 channel indicator LEDs (active-high, 220 ohm resistor)
         "led_dailybrief": 12,       # pin 32
         "led_talkshow": 22,         # pin 15
-        "led_music": 23,            # pin 16
+        "led_music": 16,            # pin 36 (moved from GPIO 23 — conflicts with volume encoder)
         "led_memos": 27,            # pin 13
-
-        # 2 slider indicator LEDs
-        "led_tuning": 14,           # pin  8  (TX — safe if UART console disabled)
-        "led_volume": 15,           # pin 10  (RX — safe if UART console disabled)
 
         # ── E-ink display (Waveshare 2.13" HAT, SPI0 CE0) ──
         "epd_cs": 8,                # pin 24  SPI0 CE0
@@ -126,6 +131,9 @@ CONFIG = {
     # ─── NFC — PN532 via I2C1 ───
     #   SDA = GPIO 2  (pin 3)
     #   SCL = GPIO 3  (pin 5)
+    #   NOTE: GPIO 3 is shared with volume encoder button (btn_nfc).
+    #   NFC read is triggered by the same button press, so the I2C
+    #   transaction happens after the button callback fires.
     "NFC": {
         "interface": "i2c",
         "i2c_bus": 1,              # /dev/i2c-1

@@ -154,7 +154,7 @@ PERSONA_REGISTRY: dict[str, Persona] = {
             "or assumptions others didn't notice. Brings curiosity, honesty, and moral "
             "simplicity into discussions adults make too complex."
         ),
-        voice_key="wacky_theater",
+        voice_key="kid_lily",
         specialties=("ethics", "comedy", "philosophy", "weird"),
         speak_style=(
             "Use short, simple sentences. Be curious and playful. Ask questions instead "
@@ -438,9 +438,10 @@ DEFAULT_SLOTS: tuple[str, str, str] = (
 VOICES: dict[str, str] = {
     "dj":                 "iP95p4xoKVk53GoZ742B",   # Chris
     "wacky_gymbro":       "IKne3meq5aSn9XLyUdCD",   # Charlie
-    "wacky_conspiracy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura
-    "wacky_grandpa":      "pqHfZKP75CvOlQylNhV4",   # Bill
-    "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily
+    "wacky_conspiracy":   "y0SYydk17lMbUIUvSf3N",   # AK British Posh — Dr. Elena
+    "wacky_grandpa":      "xKhbyU7E3bC6T89Kn26c",   # Adam Spencer — Hiroshi
+    "wacky_theater":      "pFZP5JQG7iQjIQuC4Bku",   # Lily (generic, unused)
+    "kid_lily":           "wGcFBfKz5yUQqhqr0mVy",   # Maria Moody — Lily the kid
     "wacky_techbro":      "N2lVS1w4EtoT3dr4eOWO",   # Callum
     "wacky_grandma":      "cgSgspJ2msm6clMCkdW9",   # Jessica
     "wacky_weather":      "SOYHLrjzK2X1ezoPC6cr",   # Harry

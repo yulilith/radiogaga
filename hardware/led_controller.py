@@ -9,15 +9,14 @@ class LEDController:
     """Manages 6 LEDs: 4 channel indicators + 2 slider indicators."""
 
     CHANNEL_LED_MAP = {
-        "music": 23,            # GPIO 23, pin 16
+        "music": 16,            # GPIO 16, pin 36
         "talkshow": 22,         # GPIO 22, pin 15
         "dailybrief": 12,       # GPIO 12, pin 32
         "memos": 27,            # GPIO 27, pin 13
     }
 
     SLIDER_LED_MAP = {
-        "tuning": 14,           # GPIO 14, pin 8
-        "volume": 15,           # GPIO 15, pin 10
+        # No slider LEDs — rotary encoders don't need indicator LEDs
     }
 
     def __init__(self, config: dict):
