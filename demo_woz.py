@@ -100,9 +100,9 @@ class WozDemo:
 
     def _play_channel_content(self, channel: str, generation: int):
         """Play static burst followed by channel MP3 files (runs in thread)."""
-        # Brief static burst (0.8s)
-        self.player.start_static()
-        time.sleep(0.8)
+        # Transition static burst (~1s) so users know they're switching channels
+        self.player.start_static(transition=True)
+        time.sleep(1.0)
         self.player.stop_static()
 
         # Play each MP3 file in sequence

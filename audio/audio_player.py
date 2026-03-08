@@ -43,10 +43,14 @@ class AudioPlayer:
         self._generation = 0
 
         self._static_mode = False
-        self._static_volume = 0.10  # white noise amplitude (was 0.15)
+        self._in_transition = False
+        self._static_volume = 0.03  # idle white noise amplitude (very low)
+        self._transition_static_volume = 0.03  # same as idle (transition burst on channel switch)
         self._radio_filter_strength = radio_filter_strength
         self._filtered_static_chunks: list[bytes] = []
+        self._transition_static_chunks: list[bytes] = []
         self._filtered_static_idx = 0
+        self._transition_static_idx = 0
         self._build_filtered_static_pool()
 
     def _open_output_stream(self):
@@ -120,9 +124,10 @@ class AudioPlayer:
     # Static noise
     # ------------------------------------------------------------------
 
-    def _generate_static(self, num_samples: int | None = None) -> bytes:
+    def _generate_static(self, num_samples: int | None = None, volume_override: float | None = None) -> bytes:
         n = num_samples or self.CHUNK_SIZE
-        scale = self._static_volume * 32767
+        vol = volume_override if volume_override is not None else self._static_volume
+        scale = vol * 32767
         samples = [int(random.uniform(-scale, scale)) for _ in range(n)]
         return struct.pack(f"<{n}h", *samples)
 
@@ -140,43 +145,55 @@ class AudioPlayer:
         return seg
 
     def _build_filtered_static_pool(self, pool_size: int = 16):
-        """Pre-generate a pool of band-pass filtered static chunks.
+        """Pre-generate pools of band-pass filtered static chunks (idle + transition).
 
         Each chunk is exactly CHUNK_SIZE samples (2048 bytes) so it matches
         the playback frame size with no gaps.
         """
-        pool: list[bytes] = []
-        for _ in range(pool_size):
-            raw = self._generate_static(self.CHUNK_SIZE)
-            seg = AudioSegment(
-                data=raw,
-                sample_width=2,
-                frame_rate=self.SAMPLE_RATE,
-                channels=self.CHANNELS,
-            )
-            if seg.dBFS != float("-inf"):
-                seg = seg + (-20 - seg.dBFS)
-            if self._radio_filter_strength > 0:
-                s = self._radio_filter_strength
-                seg = seg.high_pass_filter(int(20 + 280 * s))
-                seg = seg.low_pass_filter(int(20000 - 17000 * s))
-            pool.append(seg.raw_data[:self.CHUNK_SIZE * 2])
-        self._filtered_static_chunks = pool
+        for vol, pool_attr in [
+            (self._static_volume, "_filtered_static_chunks"),
+            (self._transition_static_volume, "_transition_static_chunks"),
+        ]:
+            pool: list[bytes] = []
+            for _ in range(pool_size):
+                raw = self._generate_static(self.CHUNK_SIZE, volume_override=vol)
+                seg = AudioSegment(
+                    data=raw,
+                    sample_width=2,
+                    frame_rate=self.SAMPLE_RATE,
+                    channels=self.CHANNELS,
+                )
+                if seg.dBFS != float("-inf"):
+                    seg = seg + (-20 - seg.dBFS)
+                if self._radio_filter_strength > 0:
+                    s = self._radio_filter_strength
+                    seg = seg.high_pass_filter(int(20 + 280 * s))
+                    seg = seg.low_pass_filter(int(20000 - 17000 * s))
+                pool.append(seg.raw_data[:self.CHUNK_SIZE * 2])
+            setattr(self, pool_attr, pool)
         self._filtered_static_idx = 0
+        self._transition_static_idx = 0
 
     def _next_static_chunk(self) -> bytes:
-        """Return the next pre-filtered static chunk, cycling through the pool."""
+        """Return the next pre-filtered static chunk (idle or transition pool)."""
+        if self._in_transition and self._transition_static_chunks:
+            chunk = self._transition_static_chunks[self._transition_static_idx]
+            self._transition_static_idx = (self._transition_static_idx + 1) % len(self._transition_static_chunks)
+            return chunk
         if not self._filtered_static_chunks:
             return self._generate_static()
         chunk = self._filtered_static_chunks[self._filtered_static_idx]
         self._filtered_static_idx = (self._filtered_static_idx + 1) % len(self._filtered_static_chunks)
         return chunk
 
-    def start_static(self):
+    def start_static(self, transition: bool = False):
+        """Start static playback. Use transition=True for channel-switch burst."""
         self._static_mode = True
+        self._in_transition = transition
 
     def stop_static(self):
         self._static_mode = False
+        self._in_transition = False
 
     # ------------------------------------------------------------------
     # Radio voice filter
