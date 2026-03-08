@@ -1,281 +1,549 @@
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import AsyncGenerator
 
-from content.agent import BaseChannel, ContentChunk, BASE_SYSTEM_PROMPT
+from content.agent import BASE_SYSTEM_PROMPT, BaseChannel, ContentChunk
 from log import get_logger, log_api_call
 
 logger = get_logger(__name__)
 
 
-# Two debate hosts — ported from radio-agent persona definitions
-DEBATE_HOSTS = {
-    "alex": {
-        "name": "Alex",
-        "system_prompt": (
-            "You are Alex, one of two co-hosts in a live AI debate show on RadioAgent.\n\n"
-            "Your job:\n"
-            "- Speak naturally like a big-personality American radio host with a Southern edge\n"
-            "- Keep each turn to 1-3 short sentences\n"
-            "- Prefer short, punchy replies and hand the conversation back quickly\n"
-            "- React directly to the latest point instead of repeating the full debate\n"
-            "- Ask a follow-up question when it keeps the discussion moving\n"
-            "- If the user injects a message, acknowledge it and weave it into the debate\n"
-            "- Treat user messages like a live caller dialing into the show with an opinion\n"
-            "- Take a strong stance instead of sounding neutral or carefully balanced\n"
-            "- Stay opinionated but collaborative enough that the show feels entertaining\n\n"
-            "Tone: Energetic, plain-spoken, confident, slightly provocative, quirky.\n\n"
-            "Style notes:\n"
-            "- Sound like a manly Southern host with strong 'common sense' framing\n"
-            "- Use conversational American phrasing like 'folks', 'look', and 'let me tell you'\n"
-            "- Keep it warm, punchy, and radio-friendly instead of formal\n"
-            "- Have clear priors and do not be afraid to say one side is obviously stronger\n"
-            "- Make your takes colorful, memorable, and a little eccentric rather than bland\n\n"
-            "Do not use bullet points."
-        ),
-    },
-    "blair": {
-        "name": "Blair",
-        "system_prompt": (
-            "You are Blair, the second co-host in a live AI debate show on RadioAgent.\n\n"
-            "Your job:\n"
-            "- Keep the conversation flowing in real time\n"
-            "- Reply in 1-3 short sentences\n"
-            "- Prefer concise replies and give the other host room to respond often\n"
-            "- Push back with a distinct point of view\n"
-            "- Build on user-injected messages when they appear\n"
-            "- Treat user messages like live callers dialing into the show\n"
-            "- Avoid restating the entire conversation history\n"
-            "- Stay extremely opinionated even when your tone is controlled\n"
-            "- Take a strong stance instead of drifting toward neutrality\n\n"
-            "Tone: Calm, confident, precise, opinionated, dryly quirky.\n\n"
-            "Style notes:\n"
-            "- Speak in a composed, deliberate way rather than trying to dominate the room\n"
-            "- Let your convictions come through clearly, but keep the delivery toned down\n"
-            "- Sound globally aware, sharp, and self-assured\n"
-            "- Have strong priors and defend them crisply instead of trying to sound balanced\n"
-            "- Let the humor be subtle and a little offbeat rather than loud\n\n"
-            "Do not use bullet points."
-        ),
-    },
+@dataclass(frozen=True, slots=True)
+class HostPersona:
+    name: str
+    show: str
+    personality: str
+
+
+@dataclass(frozen=True, slots=True)
+class GuestPersona:
+    name: str
+    title: str
+    personality: str
+    specialties: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TalkTurn:
+    speaker_role: str
+    speaker_name: str
+    text: str
+
+
+HOST_PERSONALITIES = {
+    "tech": HostPersona(
+        name="Alex Circuit",
+        show="The Digital Pulse",
+        personality="Enthusiastic tech nerd who explains complex topics in fun, accessible ways. Loves analogies. Slightly sarcastic about tech hype.",
+    ),
+    "popculture": HostPersona(
+        name="Maya Buzz",
+        show="Culture Wave",
+        personality="Energetic, opinionated pop culture commentator. Has hot takes on everything from movies to memes. Loves connecting random cultural dots.",
+    ),
+    "philosophy": HostPersona(
+        name="Professor Nyx",
+        show="The Midnight Philosopher",
+        personality="Thoughtful, warm, slightly whimsical host who makes deep questions feel approachable. Uses everyday examples to explore big ideas.",
+    ),
+    "comedy": HostPersona(
+        name="Danny Punchline",
+        show="The Laugh Track",
+        personality="Quick-witted comedian who finds humor in current events and everyday life. Self-deprecating, observational comedy style. Keeps it clean.",
+    ),
+    "advice": HostPersona(
+        name="Dr. Sage",
+        show="The Open Line",
+        personality="Warm, empathetic advice host. Gives thoughtful perspective on life questions. Part therapist, part wise friend. Never preachy.",
+    ),
 }
 
-# Topic categories per subchannel
-DEBATE_TOPICS = {
-    "tech": "technology, AI, gadgets, and the future of the internet",
-    "popculture": "movies, TV shows, music, memes, and celebrity culture",
-    "philosophy": "ethics, existence, society, and big life questions",
-    "comedy": "humor, stand-up, absurd hypotheticals, and funny hot takes",
-    "advice": "life advice, relationships, career, and everyday dilemmas",
+GUEST_PERSONALITIES = (
+    GuestPersona(
+        name="Rhea Vector",
+        title="product skeptic and AI builder",
+        personality="Fast-talking, playful, and allergic to hype. Loves asking whether a shiny new thing actually helps real people.",
+        specialties=("tech", "ai", "apps", "startups", "privacy", "internet"),
+    ),
+    GuestPersona(
+        name="Blair Meridian",
+        title="culture strategist and trend watcher",
+        personality="Calm, sharp, and globally aware. Reads drama like a systems problem and loves spotting the power move under the headline.",
+        specialties=("popculture", "internet", "social", "drama", "celebrity", "fashion"),
+    ),
+    GuestPersona(
+        name="Professor Mira Vale",
+        title="philosopher of technology and culture",
+        personality="Measured, insightful, and a little eerie in the best way. Turns messy headlines into bigger questions about meaning, identity, and power.",
+        specialties=("philosophy", "ethics", "society", "culture", "ai", "future"),
+    ),
+    GuestPersona(
+        name="Miles Static",
+        title="stand-up comic and internet anthropologist",
+        personality="Dry, mischievous, and quick with a sideways analogy. Loves pointing out the absurd detail everyone else missed.",
+        specialties=("comedy", "weird", "meme", "viral", "internet", "drama"),
+    ),
+    GuestPersona(
+        name="Nia Sol",
+        title="relationship coach with zero patience for nonsense",
+        personality="Warm but blunt. Cuts through chaos quickly and translates public messes into practical lessons about boundaries, work, and self-respect.",
+        specialties=("advice", "relationships", "career", "wellness", "burnout", "friendship"),
+    ),
+    GuestPersona(
+        name="Dex Wilder",
+        title="gossip columnist and chaos archivist",
+        personality="Big energy, gleefully observant, and impossible to bore. Treats every public spat like a tiny masterpiece of bad decision-making.",
+        specialties=("popculture", "drama", "celebrity", "viral", "meme", "comedy"),
+    ),
+    GuestPersona(
+        name="Jordan Pike",
+        title="career columnist and workplace realist",
+        personality="Grounded, skeptical, and very good at turning online noise into concrete advice about work, money, and ambition.",
+        specialties=("advice", "career", "money", "workplace", "tech", "economy"),
+    ),
+    GuestPersona(
+        name="Leona Drift",
+        title="future-of-society essayist",
+        personality="Thoughtful, probing, and a little poetic. Loves connecting today's trend to a deeper shift in how people live and relate to each other.",
+        specialties=("philosophy", "society", "future", "culture", "relationships", "internet"),
+    ),
+)
+
+SUBCHANNEL_TOPIC_KEYWORDS = {
+    "tech": ("ai", "tech", "apple", "google", "meta", "startup", "robot", "chip", "app", "software", "internet", "openai", "tesla"),
+    "popculture": ("movie", "show", "music", "celebrity", "tiktok", "viral", "fashion", "netflix", "award", "album", "drama", "influencer"),
+    "philosophy": ("ethics", "society", "identity", "future", "culture", "power", "truth", "human", "values", "meaning", "freedom"),
+    "comedy": ("meme", "viral", "bizarre", "wild", "weird", "drama", "awkward", "chaos", "cringe"),
+    "advice": ("dating", "relationship", "career", "money", "burnout", "friend", "wellness", "marriage", "parenting", "work"),
+}
+
+TOPIC_TAG_KEYWORDS = {
+    "ai": ("ai", "artificial intelligence", "openai", "chatgpt", "llm"),
+    "apps": ("app", "software", "iphone", "android", "platform"),
+    "privacy": ("privacy", "data", "surveillance", "cyber", "hack"),
+    "internet": ("internet", "online", "social media", "reddit", "tiktok", "x ", "twitter", "youtube"),
+    "celebrity": ("celebrity", "actor", "actress", "singer", "album", "award", "hollywood"),
+    "drama": ("drama", "feud", "backlash", "scandal", "controversy", "beef"),
+    "culture": ("culture", "fashion", "movie", "tv", "show", "media"),
+    "ethics": ("ethics", "moral", "truth", "fairness", "bias"),
+    "society": ("society", "public", "community", "people", "democracy", "politics"),
+    "future": ("future", "next", "long term", "tomorrow"),
+    "weird": ("weird", "bizarre", "odd", "absurd", "strange"),
+    "meme": ("meme", "viral", "trend", "internet joke"),
+    "relationships": ("dating", "relationship", "marriage", "breakup", "friendship", "family"),
+    "career": ("career", "job", "work", "boss", "layoff", "salary"),
+    "money": ("money", "economy", "market", "rent", "price", "cost"),
+    "wellness": ("therapy", "wellness", "health", "burnout", "stress"),
+}
+
+SUBCHANNEL_ANGLES = {
+    "tech": "Treat the topic like a live tech radio segment. Separate what is genuinely useful from what is just hype.",
+    "popculture": "Treat the topic like a culture and drama segment. Focus on why people are obsessed with it right now.",
+    "philosophy": "Treat the topic like a doorway into a bigger question about meaning, identity, ethics, or society.",
+    "comedy": "Treat the topic like comedy material. Punch up at the absurdity, but keep it radio-friendly.",
+    "advice": "Treat the topic like a practical life lesson. Pull out the emotional or real-world takeaway listeners can use.",
 }
 
 
 class TalkShowChannel(BaseChannel):
-    """Talk Show channel with two-host debate format."""
+    """Talk Show channel with fixed hosts and a rotating guest per segment."""
+
+    def __init__(self, context_provider, config: dict):
+        super().__init__(context_provider, config)
+        self._turn_history: list[TalkTurn] = []
+        self._active_subchannel = "tech"
+        self._current_topic: dict | None = None
+        self._current_guest: GuestPersona | None = None
+        self._guest_rotation_index = 0
 
     def channel_name(self) -> str:
         return "Talk Show"
 
     def get_voice_id(self, subchannel: str) -> str:
-        return self.config["VOICES"].get("talk_host", "onwK4e9ZLuTAKqWW03F9")
+        voices = self.config.get("VOICES", {})
+        return voices.get("talk_host") or voices.get("talkshow") or "onwK4e9ZLuTAKqWW03F9"
 
     def get_cohost_voice_id(self) -> str:
-        return self.config["VOICES"].get("talk_cohost", "XB0fDUnXU5powFXDhCwa")
+        voices = self.config.get("VOICES", {})
+        return voices.get("talk_cohost") or voices.get("talkshow") or "XB0fDUnXU5powFXDhCwa"
 
     def get_system_prompt(self, subchannel: str, context: dict) -> str:
-        """Not used directly — see _build_host_prompt instead."""
-        return self._build_host_prompt("alex", subchannel, context)
-
-    def _build_host_prompt(self, host_key: str, subchannel: str, context: dict) -> str:
-        host = DEBATE_HOSTS[host_key]
-        topic_domain = DEBATE_TOPICS.get(subchannel, DEBATE_TOPICS["tech"])
-
-        reddit = context.get("reddit_trending", [])
-        reddit_str = "\n".join(f"- {r}" for r in reddit[:5]) if reddit else "No Reddit trends available"
-        on_this_day = context.get("on_this_day", [])
-        history_str = "\n".join(f"- {h}" for h in on_this_day) if on_this_day else ""
-
-        return BASE_SYSTEM_PROMPT.format(**context) + f"""
-CHANNEL: Talk Show — The Great Debate
-HOST: {host['name']}
-DEBATE TOPIC DOMAIN: {topic_domain}
-
-{host['system_prompt']}
-
-WHAT PEOPLE ARE TALKING ABOUT:
-Reddit trending:
-{reddit_str}
-
-Google trends: {', '.join(context.get('google_trends', [])[:5])}
-
-{"On this day in history:" + chr(10) + history_str if history_str else ""}
-
-ADDITIONAL INSTRUCTIONS:
-- You are debating with your co-host. React to what they just said.
-- Pick topics from the "{topic_domain}" domain.
-- Use trending topics as inspiration, but add your unique spin.
-- Keep to 2-3 sentences per turn. Be punchy. Hand it back.
+        host = self._get_host(subchannel)
+        topic = self._pick_talkshow_topic(context, subchannel)
+        return self._base_prompt(context) + f"""
+CHANNEL: Talk Show - {host.show}
+HOST NAME: {host.name}
+HOST PERSONALITY: {host.personality}
+SHOW FORMAT: Two-voice talk show with a host and a guest.
+CURRENT SUBCHANNEL: {self._normalize_subchannel(subchannel)}
+CURRENT SEGMENT TOPIC: {topic['text']}
+SEGMENT ANGLE: {topic['angle']}
 """
 
-    async def _generate_turn(self, host_key: str, subchannel: str, ctx: dict) -> str:
-        """Generate one host's turn using shared conversation history."""
-        system_prompt = self._build_host_prompt(host_key, subchannel, ctx)
-
-        # Build messages: shared history + prompt for next turn
-        if not self.history:
-            user_msg = "Start the show! Introduce yourself briefly and kick off a debate topic."
-        else:
-            user_msg = "Continue the debate. React to what was just said and make your point."
-
-        messages = [
-            *self.history,
-            {"role": "user", "content": user_msg},
-        ]
-
-        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
-        max_tokens = self.config.get("LLM_MAX_TOKENS", 300)
-
-        full_response = ""
-        t0 = time.monotonic()
-        async with self.client.messages.stream(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=self.config.get("LLM_TEMPERATURE", 0.85),
-            system=system_prompt,
-            messages=messages,
-        ) as stream:
-            async for text in stream.text_stream:
-                if self._cancelled:
-                    return ""
-                full_response += text
-
-        duration_ms = (time.monotonic() - t0) * 1000
-        log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
-                     model=model, context=f"debate_{host_key}", response_len=len(full_response))
-
-        return full_response.strip()
-
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
-        """Generate a continuous debate stream alternating between Alex and Blair."""
-        logger.info("stream_content started (debate mode)", extra={
-            "channel": self.channel_name(), "subchannel": subchannel,
-        })
+        """Generate a two-person talk show segment with a fixed host and rotating guest."""
+        active_subchannel = self._normalize_subchannel(subchannel)
+        host_voice_id = self.get_voice_id(active_subchannel)
+        guest_voice_id = self.get_cohost_voice_id()
+        self._active_subchannel = active_subchannel
 
-        alex_voice = self.get_voice_id(subchannel)
-        blair_voice = self.get_cohost_voice_id()
-        turn_order = [
-            ("alex", alex_voice),
-            ("blair", blair_voice),
-        ]
-        turn_index = 0
-
+        logger.info("talk show stream started", extra={"subchannel": active_subchannel})
         while not self._cancelled:
             ctx = await self.context.get_context()
-            host_key, voice_id = turn_order[turn_index % 2]
-            host_name = DEBATE_HOSTS[host_key]["name"]
+            host = self._get_host(active_subchannel)
+            topic = self._pick_talkshow_topic(ctx, active_subchannel)
+            guest = self._select_guest_persona(topic, active_subchannel, advance_rotation=True)
 
-            logger.info("generating debate turn", extra={
-                "host": host_name, "turn": turn_index, "subchannel": subchannel,
-            })
+            self._active_subchannel = active_subchannel
+            self._current_topic = topic
+            self._current_guest = guest
 
-            response = await self._generate_turn(host_key, subchannel, ctx)
-            if not response or self._cancelled:
-                break
+            logger.info(
+                "generating talk show segment",
+                extra={
+                    "subchannel": active_subchannel,
+                    "host": host.name,
+                    "guest": guest.name,
+                    "topic_source": topic["source"],
+                    "topic_preview": topic["text"][:80],
+                },
+            )
 
-            # Tag the response in history so each host knows who said what
-            self.history.append({"role": "user", "content": f"[{host_name}] {response}"})
-            # Also keep an assistant echo so the API sees alternating roles
-            self.history.append({"role": "assistant", "content": response})
-            if len(self.history) > self.max_history:
-                self.history = self.history[-self.max_history:]
+            segment_turns: list[TalkTurn] = []
+            turns = [
+                ("host_open", host, guest, host_voice_id, 0.25),
+                ("guest_reply", guest, host, guest_voice_id, 0.25),
+                ("host_close", host, guest, host_voice_id, 1.0),
+            ]
 
-            # Yield the whole turn as one chunk with the host's voice
-            yield ContentChunk(text=response, voice_id=voice_id, pause_after=0.8)
+            for turn_kind, speaker, counterpart, voice_id, pause_after in turns:
+                if self._cancelled:
+                    return
 
-            turn_index += 1
+                text = await self._generate_turn(
+                    speaker=speaker,
+                    counterpart=counterpart,
+                    subchannel=active_subchannel,
+                    context=ctx,
+                    topic=topic,
+                    segment_turns=segment_turns,
+                    turn_kind=turn_kind,
+                )
 
-            # Brief pause between turns
+                turn = TalkTurn(
+                    speaker_role="host" if speaker == host else "guest",
+                    speaker_name=speaker.name,
+                    text=text,
+                )
+                segment_turns.append(turn)
+                self._remember_turn(turn)
+
+                yield ContentChunk(text=text, voice_id=voice_id, pause_after=pause_after)
+
             if not self._cancelled:
-                await asyncio.sleep(0.3)
+                await self._sleep_between_segments()
 
     async def handle_callin(self, transcript: str) -> AsyncGenerator[ContentChunk, None]:
-        """Route caller input into the debate — next host up responds."""
+        """Talk show host responds to a caller in the active subchannel voice."""
         ctx = await self.context.get_context()
+        host = self._get_host(self._active_subchannel)
+        topic_text = self._current_topic["text"] if self._current_topic else "whatever the audience is buzzing about today"
+        guest_name = self._current_guest.name if self._current_guest else "your guest"
 
-        # Determine which host responds (alternate based on history length)
-        turn_index = len(self.history) // 2
-        host_key = "alex" if turn_index % 2 == 0 else "blair"
-        host = DEBATE_HOSTS[host_key]
-        voice_id = self.get_voice_id("") if host_key == "alex" else self.get_cohost_voice_id()
+        logger.info(
+            "talk show callin received",
+            extra={"host": host.name, "subchannel": self._active_subchannel, "transcript_preview": transcript[:60]},
+        )
 
-        logger.info("debate callin received", extra={
-            "host": host["name"], "transcript_preview": transcript[:60],
-        })
+        prompt = f"""A caller just jumped into the show.
 
-        prompt = f"""You are {host['name']}, co-host of "The Great Debate" on RadioAgent.
+Current topic: {topic_text}
+Current guest: {guest_name}
+Recent transcript:
+{self._format_transcript()}
 
-{host['system_prompt']}
+Caller transcript:
+{transcript}
 
-A listener has called in! They said:
-"{transcript}"
+Respond as {host.name} taking a live call.
+- Greet the caller warmly
+- React in character
+- Give one opinionated take on what they said
+- Pivot naturally back toward the show
+- Keep it to 2-4 short sentences
+- Do not use bullet points"""
 
-Respond naturally as a debate show host taking a call:
-1. Acknowledge the caller: "We've got a caller on the line!"
-2. React to what they said with your personality
-3. Riff on their point — agree or push back
-4. Smoothly hand it back to your co-host
-
-Keep to 2-3 sentences. Stay in character."""
-
-        messages = [
-            *self.history[-4:],
-            {"role": "user", "content": f"[CALLER] {transcript}"},
-        ]
-
-        model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
-        t0 = time.monotonic()
-        async with self.client.messages.stream(
-            model=model,
-            max_tokens=200,
-            system=prompt,
-            messages=messages,
-        ) as stream:
-            full = ""
-            async for text in stream.text_stream:
-                full += text
-        duration_ms = (time.monotonic() - t0) * 1000
-        log_api_call(logger, "anthropic", "messages.stream", status="ok", duration_ms=duration_ms,
-                     model=model, context="debate_callin", response_len=len(full))
+        full = await self._complete_text(
+            system_prompt=self._base_prompt(ctx) + f"""
+CHANNEL: Talk Show - {host.show}
+HOST NAME: {host.name}
+HOST PERSONALITY: {host.personality}
+FORMAT: Live caller interaction on a talk show.
+""",
+            prompt=prompt,
+            max_tokens=180,
+            context_label="talkshow_callin",
+        )
 
         if full.strip():
-            self.history.append({"role": "user", "content": f"[CALLER] {transcript}"})
-            self.history.append({"role": "assistant", "content": full.strip()})
-            yield ContentChunk(text=full.strip(), voice_id=voice_id, pause_after=1.0)
+            self._remember_message("user", f"Caller: {transcript}")
+            host_turn = TalkTurn(speaker_role="host", speaker_name=host.name, text=full.strip())
+            self._remember_turn(host_turn)
+            yield ContentChunk(text=full.strip(), voice_id=self.get_voice_id(self._active_subchannel), pause_after=1.0)
 
     async def generate_cohost_response(self, statement: str, subchannel: str) -> str:
-        """Generate a co-host response for agent-to-agent mode."""
+        """Generate a guest-style response for the legacy peer cohost path."""
         logger.info("generating cohost response", extra={"subchannel": subchannel})
+        active_subchannel = self._normalize_subchannel(subchannel)
         ctx = await self.context.get_context()
-        host = DEBATE_HOSTS["blair"]
+        topic = {
+            "text": statement,
+            "source": "peer_prompt",
+            "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["tech"]),
+        }
+        host = self._get_host(active_subchannel)
+        guest = self._select_guest_persona(topic, active_subchannel, advance_rotation=False)
 
-        prompt = f"""You are {host['name']}, co-host on "The Great Debate" on RadioAgent.
+        return await self._generate_turn(
+            speaker=guest,
+            counterpart=host,
+            subchannel=active_subchannel,
+            context=ctx,
+            topic=topic,
+            segment_turns=[TalkTurn(speaker_role="host", speaker_name=host.name, text=statement)],
+            turn_kind="guest_reply",
+        )
 
-{host['system_prompt']}
+    def reset(self):
+        """Reset talk show playback state when tuning or switching channels."""
+        super().reset()
+        self.clear_history()
+        self._turn_history.clear()
+        self._active_subchannel = "tech"
+        self._current_topic = None
+        self._current_guest = None
+        self._guest_rotation_index = 0
 
-The other host just said:
-"{statement}"
+    async def _sleep_between_segments(self):
+        await asyncio.sleep(0.5)
 
-Respond as a co-host: react, push back or build on their point. 2-3 sentences max."""
+    def _get_host(self, subchannel: str) -> HostPersona:
+        return HOST_PERSONALITIES.get(self._normalize_subchannel(subchannel), HOST_PERSONALITIES["tech"])
 
+    def _normalize_subchannel(self, subchannel: str) -> str:
+        return subchannel if subchannel in HOST_PERSONALITIES else "tech"
+
+    def _base_prompt(self, context: dict) -> str:
+        return BASE_SYSTEM_PROMPT.format(
+            current_datetime=context.get("current_datetime", "Unknown"),
+            day_of_week=context.get("day_of_week", "Unknown"),
+            city=context.get("city", "Unknown"),
+            state=context.get("state", ""),
+            weather=context.get("weather", "unavailable"),
+            trending_topics=context.get("trending_topics", "No trending topics available"),
+        )
+
+    def _pick_talkshow_topic(self, context: dict, subchannel: str) -> dict:
+        active_subchannel = self._normalize_subchannel(subchannel)
+        preferred_keywords = SUBCHANNEL_TOPIC_KEYWORDS.get(active_subchannel, ())
+        fallback_topic = None
+        topic_sources = (
+            ("headline", context.get("headlines", [])),
+            ("reddit", context.get("reddit_trending", [])),
+            ("google", context.get("google_trends", [])),
+            ("history", context.get("on_this_day", [])),
+        )
+
+        for source, items in topic_sources:
+            for raw_item in items:
+                candidate_text = str(raw_item).strip()
+                if not candidate_text:
+                    continue
+
+                candidate = {
+                    "source": source,
+                    "text": candidate_text,
+                    "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["tech"]),
+                }
+                if fallback_topic is None:
+                    fallback_topic = candidate
+
+                if any(keyword in candidate_text.lower() for keyword in preferred_keywords):
+                    return candidate
+
+        if fallback_topic:
+            return fallback_topic
+
+        fallback_text = context.get("trending_topics") or "the latest topic everyone seems to be spiraling about"
+        return {
+            "source": "fallback",
+            "text": fallback_text,
+            "angle": SUBCHANNEL_ANGLES.get(active_subchannel, SUBCHANNEL_ANGLES["tech"]),
+        }
+
+    def _select_guest_persona(self, topic: dict, subchannel: str, advance_rotation: bool) -> GuestPersona:
+        topic_tags = self._extract_topic_tags(topic["text"], subchannel)
+        scored_candidates: list[tuple[int, GuestPersona]] = []
+        for guest in GUEST_PERSONALITIES:
+            score = self._score_guest(guest, topic_tags)
+            if score > 0:
+                scored_candidates.append((score, guest))
+
+        scored_candidates.sort(key=lambda item: (-item[0], item[1].name))
+        candidates = [guest for _, guest in scored_candidates[:3]] or list(GUEST_PERSONALITIES)
+
+        rotation_index = self._guest_rotation_index
+        if advance_rotation:
+            self._guest_rotation_index += 1
+
+        chosen = candidates[rotation_index % len(candidates)]
+        return chosen
+
+    def _extract_topic_tags(self, topic_text: str, subchannel: str) -> set[str]:
+        lower_topic = topic_text.lower()
+        tags = {self._normalize_subchannel(subchannel)}
+        for tag, keywords in TOPIC_TAG_KEYWORDS.items():
+            if any(keyword in lower_topic for keyword in keywords):
+                tags.add(tag)
+
+        if "reddit" in lower_topic:
+            tags.add("internet")
+        if "trend" in lower_topic or "viral" in lower_topic:
+            tags.add("meme")
+        return tags
+
+    def _score_guest(self, guest: GuestPersona, topic_tags: set[str]) -> int:
+        return sum(2 if tag in HOST_PERSONALITIES else 1 for tag in topic_tags if tag in guest.specialties)
+
+    async def _generate_turn(
+        self,
+        *,
+        speaker: HostPersona | GuestPersona,
+        counterpart: HostPersona | GuestPersona,
+        subchannel: str,
+        context: dict,
+        topic: dict,
+        segment_turns: list[TalkTurn],
+        turn_kind: str,
+    ) -> str:
+        speaker_role = "host" if isinstance(speaker, HostPersona) else "guest"
+        counterpart_role = "guest" if speaker_role == "host" else "host"
+        transcript = self._format_transcript(segment_turns)
+        prompt = f"""Segment topic: {topic['text']}
+Topic source: {topic['source']}
+Show angle: {topic['angle']}
+Current subchannel: {subchannel}
+Recent transcript:
+{transcript}
+
+{self._turn_instruction(turn_kind, speaker, counterpart)}
+"""
+
+        system_prompt = self._base_prompt(context) + f"""
+CHANNEL: Talk Show - {self._get_host(subchannel).show}
+YOUR ROLE: {speaker_role}
+YOUR NAME: {speaker.name}
+YOUR PERSONALITY: {speaker.personality}
+OTHER ON-AIR VOICE: {counterpart.name} ({counterpart_role})
+OTHER VOICE STYLE: {counterpart.personality}
+SHOW FORMAT:
+- This is a live two-person talk show segment
+- Keep each turn to 1-3 short sentences
+- Sound opinionated, quick, and radio-friendly
+- React to the latest point instead of repeating the whole topic
+- Do not use bullet points, markdown, or stage directions
+"""
+
+        max_tokens = 140 if turn_kind != "host_close" else 110
+        return await self._complete_text(
+            system_prompt=system_prompt,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            context_label=f"talkshow_{turn_kind}",
+        )
+
+    def _turn_instruction(
+        self,
+        turn_kind: str,
+        speaker: HostPersona | GuestPersona,
+        counterpart: HostPersona | GuestPersona,
+    ) -> str:
+        if turn_kind == "host_open":
+            return (
+                f"Open the segment as {speaker.name}. Set up why listeners care about this topic today, "
+                f"give one sharp opinion, and tee up {counterpart.name} for a response."
+            )
+        if turn_kind == "guest_reply":
+            return (
+                f"Reply directly to {counterpart.name}'s latest point as a guest. Push back, sharpen the angle, "
+                f"or add a fresher take, then toss it back to {counterpart.name}."
+            )
+        return (
+            f"Respond briefly as {speaker.name}. Land one memorable closing thought and end with a tease, question, "
+            f"or transition for listeners."
+        )
+
+    def _format_transcript(self, segment_turns: list[TalkTurn] | None = None) -> str:
+        recent_turns = self._turn_history[-6:]
+        combined_turns = [*recent_turns, *(segment_turns or [])]
+        if not combined_turns:
+            return "No one has spoken yet."
+        return "\n".join(f"{turn.speaker_name}: {turn.text}" for turn in combined_turns)
+
+    def _remember_turn(self, turn: TalkTurn):
+        self._turn_history.append(turn)
+        max_turns = max(6, self.max_history * 2)
+        if len(self._turn_history) > max_turns:
+            self._turn_history = self._turn_history[-max_turns:]
+        self._remember_message("assistant", f"{turn.speaker_name}: {turn.text}")
+
+    def _remember_message(self, role: str, content: str):
+        self.history.append({"role": role, "content": content})
+        max_messages = max(8, self.max_history * 2)
+        if len(self.history) > max_messages:
+            self.history = self.history[-max_messages:]
+
+    async def _complete_text(
+        self,
+        *,
+        system_prompt: str,
+        prompt: str,
+        max_tokens: int,
+        context_label: str,
+    ) -> str:
         model = self.config.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+        temperature = self.config.get("LLM_TEMPERATURE", 0.9)
         t0 = time.monotonic()
         response = await self.client.messages.create(
             model=model,
-            max_tokens=150,
-            system=prompt,
-            messages=[{"role": "user", "content": statement}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system_prompt,
+            messages=[{"role": "user", "content": prompt}],
         )
+        text = self._extract_text(response)
         duration_ms = (time.monotonic() - t0) * 1000
-        log_api_call(logger, "anthropic", "messages.create", status="ok", duration_ms=duration_ms,
-                     model=model, context="cohost_response", response_len=len(response.content[0].text))
-        return response.content[0].text
+        log_api_call(
+            logger,
+            "anthropic",
+            "messages.create",
+            status="ok",
+            duration_ms=duration_ms,
+            model=model,
+            context=context_label,
+            response_len=len(text),
+        )
+        return text
+
+    @staticmethod
+    def _extract_text(response) -> str:
+        text_parts = []
+        for block in getattr(response, "content", []):
+            block_text = getattr(block, "text", None)
+            if isinstance(block_text, str):
+                text_parts.append(block_text)
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            raise RuntimeError("Talk show generation returned an empty response")
+        return full_text

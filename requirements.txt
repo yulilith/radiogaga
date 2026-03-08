@@ -1,7 +1,7 @@
 # Core
 anthropic>=0.40.0          # Claude API (LLM)
 elevenlabs>=1.0.0          # TTS
-openai>=1.12.0             # Whisper STT API
+openai>=1.12.0             # OpenAI TTS fallback
 spotipy>=2.16.0            # Spotify Web API
 pydub>=0.25.1              # Audio format conversion
 
