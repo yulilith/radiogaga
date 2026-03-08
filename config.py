@@ -10,6 +10,7 @@ CONFIG = {
     # API Keys
     "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
     "ELEVENLABS_API_KEY": os.getenv("ELEVENLABS_API_KEY"),
+    "DEEPGRAM_API_KEY": os.getenv("DEEPGRAM_API_KEY"),
     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
     "SPOTIFY_CLIENT_ID": os.getenv("SPOTIFY_CLIENT_ID"),
     "SPOTIFY_CLIENT_SECRET": os.getenv("SPOTIFY_CLIENT_SECRET"),
@@ -30,6 +31,9 @@ CONFIG = {
     "TTS_OUTPUT_FORMAT": "mp3_22050_32",
     "TTS_SPEED": float(os.getenv("RADIO_ELEVENLABS_SPEED", "1.1")),
     "TTS_LATENCY_OPTIMIZATION": 3,
+
+    # STT Settings
+    "DEEPGRAM_MODEL": os.getenv("RADIO_DEEPGRAM_MODEL", "nova-3"),
 
     # Audio Settings
     "SAMPLE_RATE": 22050,
