@@ -1,22 +1,20 @@
 """Wizard of Oz Demo 2 — Multi-Agent
 
-Flow:
-  1. Machine starts "off" — e-ink shows clock (3:10 PM)
-  2. Volume knob up → turns on
-  3. Screen 1: "GOOD AFTERNOON!"
-  4. Key press → Screen 2: "CHLOE'S AGENT IS HERE"
-  5. Key press → Screen 3: "PLAYING CHLOE'S RADIO"
-  6. Key press → Screen 4: Waveform animation (running)
-  7. Key press → Screen 5: Waveform freezes in place
-  8. Key press → Screen 6: "PLAYING SPOTIFY"
-  9. Key press → Screen 7: Waveform animation (running)
-  10. Key press → Screen 8: Waveform freezes in place
+Flow (each key press advances to the next screen):
+  1. Clock (8:00 AM)
+  2. "GOOD AFTERNOON!"
+  3. "CHLOE'S AGENT IS HERE"
+  4. "PLAYING CHLOE'S RADIO"
+  5. Waveform animation
+  6. Waveform frozen
+  7. "PLAYING SPOTIFY"
+  8. Waveform animation
+  9. Waveform frozen
 
 No audio — display-only demo.
 
 Controls:
-  w/↑         = Volume up (triggers turn-on from off state)
-  any key     = Advance to next screen (once on)
+  any key     = Next screen
   q           = Quit
 """
 
@@ -33,11 +31,9 @@ from log import get_logger
 
 logger = get_logger(__name__)
 
-# Volume threshold (0-100) to trigger "turning on"
-VOLUME_ON_THRESHOLD = 10
-
-# Screens after turn-on (in order)
+# Screens in order (each key press advances)
 SCREENS = [
+    "__clock__",
     "GOOD\nAFTERNOON!",
     "CHLOE'S AGENT\nIS HERE",
     "PLAYING\nCHLOE'S RADIO",
@@ -60,9 +56,7 @@ class MultiAgentDemo:
         self._width = 250
         self._height = 122
 
-        # State: "off" → "on" (stepping through SCREENS)
-        self._state = "off"
-        self._screen_idx = -1
+        self._screen_idx = 0
         self._running = False
         self._waveform_thread = None
         self._waveform_active = False
@@ -105,15 +99,15 @@ class MultiAgentDemo:
         self._epd.displayPartial(self._epd.getbuffer(image.rotate(180)))
 
     def _show_clock(self):
-        """Show a static clock face — the 'off' state."""
+        """Show a static clock face."""
         if not self._epd:
-            print("  [DISPLAY] 3:10 PM  (machine off)")
+            print("  [DISPLAY] 8:00 AM")
             return
 
         image = self._Image.new("1", (self._width, self._height), 255)
         draw = self._ImageDraw.Draw(image)
 
-        time_text = "3:10 PM"
+        time_text = "8:00 AM"
         bbox = draw.textbbox((0, 0), time_text, font=self._font_large)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
@@ -121,8 +115,8 @@ class MultiAgentDemo:
         y = (self._height - th) // 2
         draw.text((x, y), time_text, font=self._font_large, fill=0)
 
-        self._epd.displayPartial(self._epd.getbuffer(image.rotate(180)))
-        logger.info("Displaying clock: 3:10 PM")
+        self._show_image(image)
+        logger.info("Displaying clock: 8:00 AM")
 
     def _show_centered_text(self, text):
         """Show centered text on e-ink. Supports \\n for multiline."""
@@ -202,20 +196,8 @@ class MultiAgentDemo:
 
     # ── State transitions ─────────────────────────────────────────
 
-    def _turn_on(self):
-        """Volume knob triggered — show first screen."""
-        if self._state != "off":
-            return
-        self._state = "on"
-        self._screen_idx = 0
-        logger.info("Machine turning on!")
-        print("  ▶ Machine turning on...")
-        self._show_screen(0)
-
     def _advance(self):
         """Advance to next screen on key press."""
-        if self._state != "on":
-            return
         next_idx = self._screen_idx + 1
         if next_idx >= len(SCREENS):
             print("  (already on last screen)")
@@ -228,7 +210,11 @@ class MultiAgentDemo:
         screen = SCREENS[idx]
         step = f"[{idx + 1}/{len(SCREENS)}]"
 
-        if screen == "__waveform__":
+        if screen == "__clock__":
+            print(f"  {step} Clock (8:00 AM)")
+            self._stop_waveform()
+            self._show_clock()
+        elif screen == "__waveform__":
             print(f"  {step} Waveform animation")
             if self._epd:
                 self._start_waveform()
@@ -248,16 +234,6 @@ class MultiAgentDemo:
             self._stop_waveform()
             self._show_centered_text(screen)
 
-    # ── Input handling ────────────────────────────────────────────
-
-    def _handle_input_event(self, event):
-        """Handle GPIO/hardware input events."""
-        if event.event_type == "volume_change":
-            if self._state == "off" and event.volume > VOLUME_ON_THRESHOLD:
-                self._turn_on()
-        elif event.event_type == "button_press":
-            self._advance()
-
     # ── Main loop ─────────────────────────────────────────────────
 
     async def run(self):
@@ -266,32 +242,17 @@ class MultiAgentDemo:
         # Init display
         self._init_display()
 
-        # Show the clock (off state)
-        self._show_clock()
+        # Show first screen (clock)
+        self._show_screen(0)
 
         print("\n" + "=" * 50)
         print("  RADIOAGENT — Multi-Agent Demo (WOZ)")
         print("=" * 50)
-        print("  Machine is OFF — showing 3:10 PM clock")
-        print("  Turn the volume knob up to start!")
-        print()
-        print("  Keyboard controls:")
-        print("    any key   = Turn on / next screen")
-        print("    q         = Quit")
+        print("  Press any key to advance to next screen")
+        print("  Press q to quit")
         print("=" * 50 + "\n")
 
         try:
-            # Start GPIO/ADC polling if on Pi
-            try:
-                from hardware.input_controller import InputController
-                gpio = InputController(CONFIG, self._handle_input_event)
-                if gpio._use_gpio:
-                    asyncio.create_task(gpio.start_adc_polling())
-                    logger.info("GPIO input active")
-            except Exception:
-                pass
-
-            # Keyboard input loop
             await self._keyboard_loop()
         finally:
             self._running = False
@@ -303,18 +264,13 @@ class MultiAgentDemo:
 
     async def _keyboard_loop(self):
         loop = asyncio.get_event_loop()
-        volume = 0
 
         while self._running:
             key = await loop.run_in_executor(None, self._get_key)
 
             if key == "q":
                 break
-            elif self._state == "off":
-                # Any key turns on the machine
-                self._turn_on()
-            elif self._state == "on":
-                # Any key advances to next screen
+            else:
                 self._advance()
 
     @staticmethod
