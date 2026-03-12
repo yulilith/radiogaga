@@ -14,7 +14,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SERVICE_FILE="/etc/systemd/system/radioagent-demo.service"
-DEMO_SCRIPT="${1:-demo_woz_dailynews.py}"
+DEMO_SCRIPT="${1:-demo_woz_multiagent.py}"
 USER="$(whoami)"
 
 echo "Setting up autostart for: $DEMO_SCRIPT"

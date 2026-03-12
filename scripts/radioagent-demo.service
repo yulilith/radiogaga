@@ -6,7 +6,7 @@ After=network.target sound.target
 Type=simple
 User=lilithyu
 WorkingDirectory=/home/lilithyu/radioagent
-ExecStart=/usr/bin/python3 demo_woz_dailynews.py
+ExecStart=/usr/bin/python3 demo_woz_multiagent.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
