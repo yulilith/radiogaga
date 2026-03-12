@@ -35,7 +35,7 @@ VOLUME_ON_THRESHOLD = 10
 
 # Screens after turn-on (in order)
 SCREENS = [
-    "GOOD AFTERNOON!",
+    "GOOD\nAFTERNOON!",
     "CHLOE'S AGENT\nIS HERE",
     "PLAYING\nCHLOE'S RADIO",
     "__waveform__",
@@ -101,7 +101,7 @@ class MultiAgentDemo:
     def _show_clock(self):
         """Show a static clock face — the 'off' state."""
         if not self._epd:
-            print("  [DISPLAY] 8:00 AM  (machine off)")
+            print("  [DISPLAY] 3:10 PM  (machine off)")
             return
 
         image = self._Image.new("1", (self._width, self._height), 255)
