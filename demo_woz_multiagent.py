@@ -8,6 +8,9 @@ Flow:
   5. Key press → Screen 3: "PLAYING CHLOE'S RADIO"
   6. Key press → Screen 4: Waveform animation (running)
   7. Key press → Screen 5: Waveform freezes in place
+  8. Key press → Screen 6: "PLAYING SPOTIFY"
+  9. Key press → Screen 7: Waveform animation (running)
+  10. Key press → Screen 8: Waveform freezes in place
 
 No audio — display-only demo.
 
@@ -38,6 +41,9 @@ SCREENS = [
     "GOOD\nAFTERNOON!",
     "CHLOE'S AGENT\nIS HERE",
     "PLAYING\nCHLOE'S RADIO",
+    "__waveform__",
+    "__waveform_frozen__",
+    "PLAYING\nSPOTIFY",
     "__waveform__",
     "__waveform_frozen__",
 ]
