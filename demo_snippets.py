@@ -42,31 +42,39 @@ VOICE_HIROSHI = resolve_voice_id(PERSONA_REGISTRY["hiroshi"].voice_key, CONFIG.g
 VOICE_ELENA = resolve_voice_id(PERSONA_REGISTRY["dr_elena"].voice_key, CONFIG.get("VOICES"))
 VOICE_LILY = resolve_voice_id(PERSONA_REGISTRY["lily_alaska"].voice_key, CONFIG.get("VOICES"))
 VOICE_ATLAS = resolve_voice_id(PERSONA_REGISTRY["dr_atlas"].voice_key, CONFIG.get("VOICES"))
+VOICE_MAX = resolve_voice_id(PERSONA_REGISTRY["max_voltage"].voice_key, CONFIG.get("VOICES"))
 
 # ---------------------------------------------------------------------------
 # Scripts — pre-written for the demo (~15-20s of speech each)
 # ---------------------------------------------------------------------------
 
 DAILY_BRIEF_SCRIPT = [
-    (VOICE_ATLAS, (
-        "This is Local News on RadioAgent. I'm Atlas, broadcasting live from "
-        "Cambridge, Massachusetts. Our lead story tonight: HARD MODE, the forty-eight "
-        "hour Hardware and AI Hackathon, is underway right now at the MIT Media Lab. "
-        "Two hundred participants, roughly forty teams, are building intelligent "
-        "physical devices on the sixth floor as we speak."
+    (VOICE_MAX, (
+        "Good morning, early risers! This is Max Voltage on RadioAgent, your favorite "
+        "pirate radio station broadcasting live out of Cambridge, Massachusetts. Yeah, I'm "
+        "an AI agent reading you the news. We're all just gonna be cool about that, right? "
+        "Alright. Let's start with the weather."
     )),
-    (VOICE_ATLAS, (
-        "The event is sponsored by Anthropic, Qualcomm, and Bambu Labs, among others, "
-        "with a fifty thousand dollar SAFE note up for grabs. Reports suggest organizers "
-        "Quincy Kuang and Cyrus Clarke from the Tangible Media Group have been running "
-        "on minimal sleep to keep things on track. Professor Pattie Maes and Assistant "
-        "Professor Pat Pataranutaporn are leading the faculty side."
+    (VOICE_MAX, (
+        "So, stepping outside in Cambridge today, it is looking like classic New England "
+        "nonsense. It's cold, it's gray, and if you forgot a jacket, congratulations, you "
+        "played yourself. The wind's coming off the Charles like it has a personal vendetta "
+        "against your face. Anyway, bundle up, grab your coffee, and let's get into the news."
     )),
-    (VOICE_ATLAS, (
-        "And here's an interesting footnote: this very radio station, RadioAgent, "
-        "is one of the projects being built at HARD MODE right now. So if you're "
-        "hearing this, you're listening to a hackathon project report on the hackathon "
-        "it was built at. We'll have more after this."
+    (VOICE_MAX, (
+        "Our top story: HARD MODE, the forty-eight hour Hardware and AI Hackathon, is "
+        "happening right now at the MIT Media Lab. Two hundred people, about forty teams, "
+        "building intelligent physical things on the sixth floor. Robots, wearables, stuff "
+        "that probably shouldn't exist yet. Fifty thousand dollar prize on the line. Sponsored "
+        "by Anthropic, Qualcomm, Bambu Labs. The organizers, Quincy Kuang and Cyrus Clarke, "
+        "reportedly have not slept since Thursday, which honestly tracks."
+    )),
+    (VOICE_MAX, (
+        "Oh, and here's my favorite part. This radio station, the one you're listening to "
+        "right now, is literally one of the projects being built at this hackathon. So you're "
+        "hearing a hackathon project report on the hackathon it was built at. If that's not "
+        "the most Cambridge thing you've ever heard, I don't know what is. Stay with us, "
+        "we've got more coming up."
     )),
 ]
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=RadioAgent WOZ Demo
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=lilithyu
+WorkingDirectory=/home/lilithyu/radioagent
+ExecStart=/usr/bin/python3 demo_woz_dailynews.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
