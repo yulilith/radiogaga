@@ -1,15 +1,19 @@
 """Wizard of Oz Demo 1 — Daily News
 
-Flow:
-  1. Machine starts "off" — e-ink shows a clock face (8:00 AM)
-  2. User rotates volume knob up — machine "turns on"
-  3. E-ink shows "DAILY BRIEF" splash for 5 seconds
-  4. Enters waveform animation display
-  5. Plays daily_brief.mp3
+Flow (each key press advances to the next screen):
+  1. Clock (8:00 AM)
+  2. "DAILY BRIEF"
+  3. Waveform animation
+  4. Waveform frozen
+  5. "PLAYING SPOTIFY"
+  6. Waveform animation
+  7. Waveform frozen
+
+No audio — display-only demo.
 
 Controls:
-  Hardware: volume dial triggers on, channel buttons switch channels
-  Keyboard: w/↑ = volume up (triggers on), s/↓ = volume down, q = quit
+  any key     = Next screen
+  q           = Quit
 """
 
 import asyncio
@@ -23,44 +27,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import CONFIG
 from log import get_logger
 
-# Audio is optional — allows testing display/flow on Mac without pyaudio
-try:
-    from audio.audio_player import AudioPlayer
-    _HAS_AUDIO = True
-except ImportError:
-    _HAS_AUDIO = False
-
 logger = get_logger(__name__)
 
-DEMO_DIR = Path(__file__).parent / "demo_output"
-DAILY_BRIEF_MP3 = DEMO_DIR / "daily_brief.mp3"
-
-# Volume threshold (0-100) to trigger "turning on"
-VOLUME_ON_THRESHOLD = 10
-
-
-class _StubPlayer:
-    """No-op audio player for testing without pyaudio."""
-    volume = 0.7
-    current_generation = 0
-    def start(self): print("  [AUDIO] player started (stub)")
-    def stop(self): pass
-    def start_static(self, **kw): pass
-    def stop_static(self): pass
-    def play_file(self, *a, **kw): print(f"  [AUDIO] playing {a[0]} (stub)")
-    def interrupt(self): pass
+# Screens in order (each key press advances)
+SCREENS = [
+    "__clock__",
+    "DAILY BRIEF",
+    "__waveform__",
+    "__waveform_frozen__",
+    "PLAYING\nSPOTIFY",
+    "__waveform__",
+    "__waveform_frozen__",
+]
 
 
 class DailyNewsDemo:
     def __init__(self):
-        if _HAS_AUDIO:
-            self.player = AudioPlayer(
-                radio_filter_strength=CONFIG.get("RADIO_FILTER_STRENGTH", 0.7),
-            )
-        else:
-            logger.info("pyaudio not available — running without audio")
-            self.player = _StubPlayer()
-        self.display = None
         self._epd = None
         self._Image = None
         self._ImageDraw = None
@@ -69,8 +51,7 @@ class DailyNewsDemo:
         self._width = 250
         self._height = 122
 
-        # State machine: "off" → "splash" → "playing"
-        self._state = "off"
+        self._screen_idx = 0
         self._running = False
         self._waveform_thread = None
         self._waveform_active = False
@@ -78,7 +59,7 @@ class DailyNewsDemo:
     # ── Display helpers ───────────────────────────────────────────
 
     def _init_display(self):
-        """Initialize e-ink display directly (low-level, no DisplayController)."""
+        """Initialize e-ink display directly."""
         try:
             from waveshare_epd import epd2in13_V4
             from PIL import Image, ImageDraw, ImageFont
@@ -110,15 +91,14 @@ class DailyNewsDemo:
         self._epd.displayPartial(self._epd.getbuffer(image.rotate(180)))
 
     def _show_clock(self):
-        """Show a static clock face — the 'off' state."""
+        """Show a static clock face."""
         if not self._epd:
-            print("  [DISPLAY] 8:00 AM  (machine off)")
+            print("  [DISPLAY] 8:00 AM")
             return
 
         image = self._Image.new("1", (self._width, self._height), 255)
         draw = self._ImageDraw.Draw(image)
 
-        # Center the time text
         time_text = "8:00 AM"
         bbox = draw.textbbox((0, 0), time_text, font=self._font_large)
         tw = bbox[2] - bbox[0]
@@ -127,31 +107,41 @@ class DailyNewsDemo:
         y = (self._height - th) // 2
         draw.text((x, y), time_text, font=self._font_large, fill=0)
 
-        # Use full refresh for clean initial display
-        self._epd.displayPartial(self._epd.getbuffer(image.rotate(180)))
+        self._show_image(image)
         logger.info("Displaying clock: 8:00 AM")
 
-    def _show_splash(self):
-        """Show 'DAILY BRIEF' splash screen for 5 seconds."""
+    def _show_centered_text(self, text):
+        """Show centered text on e-ink. Supports \\n for multiline."""
         if not self._epd:
-            print("  [DISPLAY] ═══ DAILY BRIEF ═══  (5 seconds)")
-            time.sleep(5)
+            display_text = text.replace('\n', ' ')
+            print(f"  [DISPLAY] {display_text}")
             return
 
         image = self._Image.new("1", (self._width, self._height), 255)
         draw = self._ImageDraw.Draw(image)
 
-        title = "DAILY BRIEF"
-        bbox = draw.textbbox((0, 0), title, font=self._font_large)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        x = (self._width - tw) // 2
-        y = (self._height - th) // 2
-        draw.text((x, y), title, font=self._font_large, fill=0)
+        lines = text.split('\n')
+        font = self._font_large
+
+        line_heights = []
+        line_widths = []
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            line_widths.append(bbox[2] - bbox[0])
+            line_heights.append(bbox[3] - bbox[1])
+
+        line_spacing = 8
+        total_h = sum(line_heights) + line_spacing * (len(lines) - 1)
+        y_start = (self._height - total_h) // 2
+
+        y = y_start
+        for i, line in enumerate(lines):
+            x = (self._width - line_widths[i]) // 2
+            draw.text((x, y), line, font=font, fill=0)
+            y += line_heights[i] + line_spacing
 
         self._show_image(image)
-        logger.info("Displaying splash: DAILY BRIEF")
-        time.sleep(5)
+        logger.info("Displaying: %s", text.replace('\n', ' | '))
 
     def _start_waveform(self):
         """Start the waveform animation in a background thread."""
@@ -183,103 +173,78 @@ class DailyNewsDemo:
         self._waveform_active = False
         if self._waveform_thread:
             self._waveform_thread.join(timeout=2)
+            self._waveform_thread = None
+
+    def _freeze_waveform(self):
+        """Stop the animation loop — last rendered frame stays on e-ink."""
+        self._waveform_active = False
+        if self._waveform_thread:
+            self._waveform_thread.join(timeout=2)
+            self._waveform_thread = None
+        logger.info("Waveform frozen")
 
     # ── State transitions ─────────────────────────────────────────
 
-    def _turn_on(self):
-        """Transition from off → splash → playing."""
-        if self._state != "off":
+    def _advance(self):
+        """Advance to next screen on key press."""
+        next_idx = self._screen_idx + 1
+        if next_idx >= len(SCREENS):
+            print("  (already on last screen)")
             return
-        self._state = "splash"
-        logger.info("Machine turning on!")
-        print("  ▶ Machine turning on...")
+        self._screen_idx = next_idx
+        self._show_screen(next_idx)
 
-        def _sequence():
-            # Splash screen
-            self._show_splash()
+    def _show_screen(self, idx):
+        """Display the screen at the given index."""
+        screen = SCREENS[idx]
+        step = f"[{idx + 1}/{len(SCREENS)}]"
 
-            # Transition to playing
-            self._state = "playing"
-            print("  ▶ Now playing: DAILY BRIEF")
-
-            # Start waveform display
+        if screen == "__clock__":
+            print(f"  {step} Clock (8:00 AM)")
+            self._stop_waveform()
+            self._show_clock()
+        elif screen == "__waveform__":
+            print(f"  {step} Waveform animation")
             if self._epd:
                 self._start_waveform()
             else:
                 print("  [DISPLAY] ═══ waveform animation ═══")
-
-            # Start audio
-            self.player.start()
-            gen = self.player.current_generation
-
-            # Brief static then play the daily brief
-            self.player.start_static(transition=True)
-            time.sleep(0.5)
-            self.player.stop_static()
-
-            if DAILY_BRIEF_MP3.exists():
-                self.player.play_file(str(DAILY_BRIEF_MP3), generation=gen)
+        elif screen == "__waveform_frozen__":
+            print(f"  {step} Waveform frozen")
+            if self._waveform_active:
+                self._freeze_waveform()
+                print("  [DISPLAY] ═══ waveform frozen ═══")
             else:
-                logger.warning("Missing: %s", DAILY_BRIEF_MP3)
-                print(f"  WARNING: {DAILY_BRIEF_MP3} not found")
-
-        threading.Thread(target=_sequence, daemon=True).start()
-
-    # ── Input handling ────────────────────────────────────────────
-
-    def _handle_input_event(self, event):
-        """Handle GPIO/hardware input events."""
-        if event.event_type == "volume_change":
-            if self._state == "off" and event.volume > VOLUME_ON_THRESHOLD:
-                self._turn_on()
-            elif self._state == "playing":
-                self.player.volume = event.volume / 100.0
+                print("  [DISPLAY] ═══ waveform frozen (was not running) ═══")
+        else:
+            display_text = screen.replace('\n', ' ')
+            print(f"  {step} {display_text}")
+            self._stop_waveform()
+            self._show_centered_text(screen)
 
     # ── Main loop ─────────────────────────────────────────────────
 
     async def run(self):
         self._running = True
 
-        # Check demo file
-        if not DAILY_BRIEF_MP3.exists():
-            print(f"WARNING: {DAILY_BRIEF_MP3} not found — audio will be skipped")
-
         # Init display
         self._init_display()
 
-        # Show the clock (off state)
-        self._show_clock()
+        # Show first screen (clock)
+        self._show_screen(0)
 
         print("\n" + "=" * 50)
         print("  RADIOAGENT — Daily News Demo (WOZ)")
         print("=" * 50)
-        print("  Machine is OFF — showing 8:00 AM clock")
-        print("  Turn the volume knob up to start!")
-        print()
-        print("  Keyboard controls:")
-        print("    any key = Turn on (or volume knob)")
-        print("    w/↑ = Volume up")
-        print("    s/↓ = Volume down")
-        print("    q   = Quit")
+        print("  Press any key to advance to next screen")
+        print("  Press q to quit")
         print("=" * 50 + "\n")
 
         try:
-            # Start GPIO/ADC polling if on Pi
-            try:
-                from hardware.input_controller import InputController
-                gpio = InputController(CONFIG, self._handle_input_event)
-                if gpio._use_gpio:
-                    asyncio.create_task(gpio.start_adc_polling())
-                    logger.info("GPIO input active")
-            except Exception:
-                pass
-
-            # Keyboard input loop
             await self._keyboard_loop()
         finally:
             self._running = False
             self._stop_waveform()
-            self.player.stop()
             if self._epd:
                 self._epd.Clear(0xFF)
                 self._epd.sleep()
@@ -287,26 +252,14 @@ class DailyNewsDemo:
 
     async def _keyboard_loop(self):
         loop = asyncio.get_event_loop()
-        volume = 0  # Start at 0 (machine is off)
 
         while self._running:
             key = await loop.run_in_executor(None, self._get_key)
 
             if key == "q":
                 break
-            elif self._state == "off" and key not in ("s", "down"):
-                # Any key (except volume-down and quit) turns on the machine
-                self._turn_on()
-            elif key in ("w", "up"):
-                volume = min(100, volume + 15)
-                if self._state == "playing":
-                    self.player.volume = volume / 100.0
-                print(f"  Volume: {volume}%")
-            elif key in ("s", "down"):
-                volume = max(0, volume - 15)
-                if self._state == "playing":
-                    self.player.volume = volume / 100.0
-                print(f"  Volume: {volume}%")
+            else:
+                self._advance()
 
     @staticmethod
     def _get_key() -> str:
