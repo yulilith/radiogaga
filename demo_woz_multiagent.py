@@ -1,7 +1,7 @@
 """Wizard of Oz Demo 2 — Multi-Agent
 
 Flow:
-  1. Machine starts "off" — e-ink shows clock (8:00 AM)
+  1. Machine starts "off" — e-ink shows clock (3:10 PM)
   2. Volume knob up → turns on
   3. Screen 1: "GOOD AFTERNOON!"
   4. Key press → Screen 2: "CHLOE'S AGENT IS HERE"
@@ -107,7 +107,7 @@ class MultiAgentDemo:
         image = self._Image.new("1", (self._width, self._height), 255)
         draw = self._ImageDraw.Draw(image)
 
-        time_text = "8:00 AM"
+        time_text = "3:10 PM"
         bbox = draw.textbbox((0, 0), time_text, font=self._font_large)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
@@ -116,7 +116,7 @@ class MultiAgentDemo:
         draw.text((x, y), time_text, font=self._font_large, fill=0)
 
         self._epd.displayPartial(self._epd.getbuffer(image.rotate(180)))
-        logger.info("Displaying clock: 8:00 AM")
+        logger.info("Displaying clock: 3:10 PM")
 
     def _show_centered_text(self, text):
         """Show centered text on e-ink. Supports \\n for multiline."""
@@ -266,7 +266,7 @@ class MultiAgentDemo:
         print("\n" + "=" * 50)
         print("  RADIOAGENT — Multi-Agent Demo (WOZ)")
         print("=" * 50)
-        print("  Machine is OFF — showing 8:00 AM clock")
+        print("  Machine is OFF — showing 3:10 PM clock")
         print("  Turn the volume knob up to start!")
         print()
         print("  Keyboard controls:")
