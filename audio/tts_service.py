@@ -27,7 +27,8 @@ class TTSService:
         self._audio_cache_limit = 128
 
     async def stream_speech(
-        self, text: str, voice_id: str | None = None
+        self, text: str, voice_id: str | None = None,
+        voice_settings: dict | None = None,
     ) -> AsyncGenerator[bytes, None]:
         """Stream TTS audio as chunks of MP3 bytes."""
         voice = voice_id or "pNInz6obpgDQGcFmaJgB"  # Default: Adam
@@ -47,15 +48,16 @@ class TTSService:
             "xi-api-key": self.elevenlabs_key,
             "Content-Type": "application/json",
         }
+        default_voice_settings = {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "speed": self.speed,
+        }
         payload = {
             "text": text,
             "model_id": self.model,
             "output_format": self.output_format,
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "speed": self.speed,
-            },
+            "voice_settings": voice_settings or default_voice_settings,
             "optimize_streaming_latency": 3,
         }
 
@@ -113,7 +115,8 @@ class TTSService:
                 async for chunk in self._openai_tts(text, voice_id):
                     yield chunk
 
-    async def synthesize(self, text: str, voice_id: str | None = None) -> bytes:
+    async def synthesize(self, text: str, voice_id: str | None = None,
+                         voice_settings: dict | None = None) -> bytes:
         """Get complete TTS audio as bytes (non-streaming)."""
         cache_key = self._build_cache_key(text, voice_id)
         cached = self._audio_cache.get(cache_key)
@@ -123,7 +126,7 @@ class TTSService:
             return cached
 
         chunks = []
-        async for chunk in self.stream_speech(text, voice_id):
+        async for chunk in self.stream_speech(text, voice_id, voice_settings=voice_settings):
             chunks.append(chunk)
         result = b"".join(chunks)
         if not result:

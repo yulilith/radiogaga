@@ -39,7 +39,9 @@ from network.discovery import AgentDiscovery
 from network.peer_comm import (
     PeerServer, PeerClient,
     msg_cohost_prompt, msg_cohost_response, msg_callin_forward,
+    msg_status_update, msg_status_request,
 )
+from network.friends import FriendsTracker
 
 logger = get_logger("main")
 
@@ -56,8 +58,9 @@ class PreviewEntry:
 class RadioAgent:
     """Main controller — wires together hardware, audio, content, and networking."""
 
-    def __init__(self, channel: str = "music"):
+    def __init__(self, channel: str = "music", agent_name: str | None = None):
         self.agent_id = str(uuid.uuid4())[:8]
+        self.agent_name = agent_name or f"Radio-{self.agent_id}"
         self._loop: asyncio.AbstractEventLoop | None = None
         self._channel_tasks: dict[str, asyncio.Task] = {}
         self._warm_tasks: dict[str, asyncio.Task] = {}
@@ -77,6 +80,8 @@ class RadioAgent:
         self._preview_cache: dict[tuple[str, str], PreviewEntry] = {}
         self._preview_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._callin_active = False
+        self.friends = FriendsTracker()
+        self._friends_broadcast_task: asyncio.Task | None = None
 
         if self._dry_run:
             logger.info("DRY-RUN MODE: TTS and audio playback disabled")
@@ -161,6 +166,8 @@ class RadioAgent:
         self.peer_server.on("cohost_prompt", self._handle_cohost_prompt)
         self.peer_server.on("callin_forward", self._handle_callin_forward)
         self.peer_server.on("hello", self._handle_hello)
+        self.peer_server.on("status_update", self._handle_status_update)
+        self.peer_server.on("status_request", self._handle_status_request)
 
     def _ensure_runtime_state(self):
         if getattr(self, "session_memory", None) is None:
@@ -179,6 +186,8 @@ class RadioAgent:
         for channel in getattr(self, "channels", {}).values():
             if hasattr(channel, "set_session_memory"):
                 channel.set_session_memory(self.session_memory)
+            if hasattr(channel, "set_friends_tracker"):
+                channel.set_friends_tracker(self.friends)
 
     def _current_generation(self) -> int:
         return getattr(self.player, "current_generation", 0)
@@ -530,9 +539,134 @@ class RadioAgent:
     async def _handle_hello(self, data: dict) -> dict:
         """Another agent introduced itself."""
         peer_id = data.get("agent_id", "?")
+        peer_name = data.get("agent_name", peer_id)
         logger.info("Peer %s says hello! Channel: %s", peer_id, data.get('current_channel'))
+        # Record them as a friend with their current activity
+        is_new = self.friends.update(
+            agent_id=peer_id,
+            agent_name=peer_name,
+            channel=data.get("current_channel", "unknown"),
+            subchannel=data.get("subchannel", ""),
+            activity=data.get("activity", "just connected"),
+        )
+        if is_new:
+            self._schedule_friend_announcement(peer_name)
         return {"type": "hello", "agent_id": self.agent_id,
+                "agent_name": self.agent_name,
                 "current_channel": self.active_channel}
+
+    async def _handle_status_update(self, data: dict) -> dict:
+        """A peer sent a status update about what they're doing."""
+        is_new = self.friends.update(
+            agent_id=data.get("agent_id", "?"),
+            agent_name=data.get("agent_name", "Unknown"),
+            channel=data.get("channel", "unknown"),
+            subchannel=data.get("subchannel", ""),
+            activity=data.get("activity", ""),
+        )
+        if is_new:
+            self._schedule_friend_announcement(data.get("agent_name", "A friend"))
+        return {"type": "ack"}
+
+    async def _handle_status_request(self, data: dict) -> dict:
+        """A peer asked for our current status."""
+        subchannel_name = get_subchannel_name(self.active_channel, self.active_subchannel)
+        return msg_status_update(
+            agent_id=self.agent_id,
+            agent_name=self.agent_name,
+            channel=self.active_channel,
+            subchannel=subchannel_name,
+            activity=f"listening to {CHANNELS.get(self.active_channel, {}).get('name', self.active_channel)}",
+        )
+
+    def _schedule_friend_announcement(self, friend_name: str):
+        """Announce a new friend connection over the speaker."""
+        if self._loop:
+            self._loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(self._announce_friend(friend_name))
+            )
+
+    async def _announce_friend(self, friend_name: str):
+        """Generate and speak an announcement that a friend connected."""
+        channel = self.channels.get(self.active_channel)
+        if not channel:
+            return
+        voice_id = channel.get_voice_id(self.active_subchannel)
+        announcement = (
+            f"{friend_name}'s radio just popped up on the network. "
+            f"Welcome to the airwaves, {friend_name}!"
+        )
+        if self._dry_run:
+            self._transcript.log_chunk(self.active_channel, self.active_subchannel,
+                                       voice_id, "friend_announce", announcement)
+            logger.info("[DRY-RUN] friend: %s", announcement)
+        else:
+            if not self.tts or not self.player:
+                return
+            try:
+                audio = await self.tts.synthesize(announcement, voice_id)
+                gid = self.player.current_generation
+                self.player.enqueue_mp3(
+                    audio, generation=gid,
+                    on_start=self._make_heard_callback(
+                        self.active_channel, self.active_subchannel, announcement
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Friend announcement TTS failed: %s", e)
+
+    def _on_peer_found(self, peer: dict):
+        """Called when a new peer is discovered on the network."""
+        logger.info("Peer found: %s", peer['agent_id'])
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._greet_peer(peer), self._loop)
+
+    def _on_peer_lost(self, peer: dict):
+        """Called when a peer leaves the network."""
+        logger.info("Peer lost: %s", peer['agent_id'])
+        self.friends.remove(peer['agent_id'])
+
+    async def _greet_peer(self, peer: dict):
+        """Send hello + status to a newly discovered peer."""
+        try:
+            from network.peer_comm import msg_hello
+            hello = msg_hello(self.agent_id, [], self.active_channel)
+            hello["agent_name"] = self.agent_name
+            hello["subchannel"] = self.active_subchannel
+            hello["activity"] = f"listening to {CHANNELS.get(self.active_channel, {}).get('name', self.active_channel)}"
+            response = await self.peer_client.send_to_peer(peer, hello)
+            if response and response.get("agent_name"):
+                self.friends.update(
+                    agent_id=response.get("agent_id", peer["agent_id"]),
+                    agent_name=response.get("agent_name", peer["agent_id"]),
+                    channel=response.get("current_channel", "unknown"),
+                    subchannel="",
+                    activity="just connected",
+                )
+                self._schedule_friend_announcement(response["agent_name"])
+        except Exception as e:
+            logger.warning("Failed to greet peer %s: %s", peer['agent_id'], e)
+
+    async def _broadcast_status_loop(self):
+        """Periodically broadcast our status to all known peers."""
+        while True:
+            await asyncio.sleep(60)
+            peers = list(self.discovery.peers.values())
+            if not peers:
+                continue
+            subchannel_name = get_subchannel_name(self.active_channel, self.active_subchannel)
+            update = msg_status_update(
+                agent_id=self.agent_id,
+                agent_name=self.agent_name,
+                channel=self.active_channel,
+                subchannel=subchannel_name,
+                activity=f"listening to {CHANNELS.get(self.active_channel, {}).get('name', self.active_channel)}",
+            )
+            for peer in peers:
+                try:
+                    await self.peer_client.send_to_peer(peer, update)
+                except Exception:
+                    pass
 
     def _on_input_event(self, event: InputEvent):
         """Handle hardware input events (may be called from GPIO thread)."""
@@ -1040,8 +1174,8 @@ class RadioAgent:
         # Start network services
         self.discovery.register(channel=self.active_channel)
         self.discovery.start_browsing(
-            on_peer_found=lambda p: logger.info("Peer found: %s", p['agent_id']),
-            on_peer_lost=lambda p: logger.info("Peer lost: %s", p['agent_id']),
+            on_peer_found=self._on_peer_found,
+            on_peer_lost=self._on_peer_lost,
         )
         await self.peer_server.start()
 
@@ -1067,6 +1201,9 @@ class RadioAgent:
         self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
 
         asyncio.create_task(self._warm_all_inactive())
+
+        # Start periodic friend status broadcasting
+        self._friends_broadcast_task = asyncio.create_task(self._broadcast_status_loop())
 
         if self.input._use_gpio:
             self._adc_task = asyncio.create_task(self.input.start_adc_polling())
@@ -1132,6 +1269,13 @@ class RadioAgent:
                 pass
         self._channel_tasks.clear()
 
+        if self._friends_broadcast_task:
+            self._friends_broadcast_task.cancel()
+            try:
+                await self._friends_broadcast_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         if self._adc_task:
             self._adc_task.cancel()
             try:
@@ -1167,6 +1311,11 @@ def parse_args() -> argparse.Namespace:
         default="music",
         help="channel to start on (default: music)",
     )
+    parser.add_argument(
+        "-n", "--name",
+        default=None,
+        help="friendly name for this radio agent (shown to peers)",
+    )
     return parser.parse_args()
 
 
@@ -1187,7 +1336,7 @@ def main():
         logger.error("Copy .env.example to .env and fill in your keys.")
         sys.exit(1)
 
-    agent = RadioAgent(channel=args.channel)
+    agent = RadioAgent(channel=args.channel, agent_name=args.name)
     asyncio.run(agent.run())
 
 

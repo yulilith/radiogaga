@@ -1,9 +1,32 @@
+# Environment & secrets
 .env
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
+
+# Audio assets & generated files
 assets/music/*.mp3
 assets/jingles/*.mp3
+demo_output/
+*.mp3
+
+# Logs
+logs/
+*.jsonl
+.radioagent/
+
+# Caches
 .cache-*
 .spotify_cache
+.pytest_cache/
+
+# IDE / editor
+.claude/
+.cursor/
+.vscode/
+*.swp
+.DS_Store

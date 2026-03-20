@@ -1,1 +1,0 @@
-Alex says the latest point was: Debate topic: Should local-first AI devices prioritize privacy over personalization?. My angle is that local-first systems are easier to trust when their behavior stays inspectable.

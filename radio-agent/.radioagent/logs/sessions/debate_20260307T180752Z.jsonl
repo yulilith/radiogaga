@@ -1,7 +1,0 @@
-{"timestamp": "2026-03-07T18:07:52.861876+00:00", "event_name": "hub_started", "payload": {"host": "127.0.0.1", "port": 8765, "expected_agents": ["agent_a", "agent_b"]}}
-{"timestamp": "2026-03-07T18:07:53.009444+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_b", "role": "agent", "agent_id": "agent_b"}}
-{"timestamp": "2026-03-07T18:07:53.010010+00:00", "event_name": "client_registered", "payload": {"client_id": "agent_a", "role": "agent", "agent_id": "agent_a"}}
-{"timestamp": "2026-03-07T18:07:53.010394+00:00", "event_name": "session_started", "payload": {"session_id": "session_fe9c3369ee7245188c56803dede07b5d", "topic": "Should local-first AI devices prioritize privacy over personalization?", "max_turns": 8}}
-{"timestamp": "2026-03-07T18:07:53.010902+00:00", "event_name": "turn_requested", "payload": {"session_id": "session_fe9c3369ee7245188c56803dede07b5d", "turn_index": 1, "speaker_id": "agent_a"}}
-{"timestamp": "2026-03-07T18:07:53.020750+00:00", "event_name": "turn_generation_started", "payload": {"session_id": "session_fe9c3369ee7245188c56803dede07b5d", "turn_index": 1, "speaker_id": "agent_a"}}
-{"timestamp": "2026-03-07T18:07:53.023707+00:00", "event_name": "client_registered", "payload": {"client_id": "cli_injector", "role": "injector", "agent_id": null}}

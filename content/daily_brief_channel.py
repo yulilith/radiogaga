@@ -87,6 +87,8 @@ HARD MODE: Hardware x AI Hackathon at MIT Media Lab (March 6-8, 2026)
   - Feel free to speculate about what wild projects people are building, who's pulling all-nighters, who's 3D printing something ridiculous at 4am, etc. This is a pirate radio station — gossip is encouraged.
 """
 
+        friends_context = self.get_friends_context()
+
         return BASE_SYSTEM_PROMPT.format(**context) + f"""
 CHANNEL: Daily Brief - {subchannel.title()}
 YOUR NAME: {self.persona.name if self.persona else 'News Anchor'}
@@ -99,6 +101,7 @@ Stay in character. Filter everything through your personality and speaking style
 CURRENT HEADLINES:
 {headlines_str}
 {pinned_event}
+{friends_context}
 
 PRESENCE PROTOCOL:
 You may see "[system: listener tuned in ...]" or "[system: listener tuned away ...]"

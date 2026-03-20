@@ -564,7 +564,7 @@ DEFAULT_SLOTS: tuple[str, str, str] = (
 # ---------------------------------------------------------------------------
 
 VOICES: dict[str, str] = {
-    "dj":                 "iP95p4xoKVk53GoZ742B",   # Chris — DJ Spark
+    "dj":                 "QMJTqaMXmGnG8TCm8WQG",   # DJ Spark
     "wacky_gymbro":       "IKne3meq5aSn9XLyUdCD",   # Charlie — Brax Ironclad
     "wacky_conspiracy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura — Tiffany Cosmos
     "wacky_grandpa":      "pqHfZKP75CvOlQylNhV4",   # Bill — Cornelius Thatch
@@ -573,6 +573,11 @@ VOICES: dict[str, str] = {
     "wacky_grandma":      "cgSgspJ2msm6clMCkdW9",   # Jessica — Peggy Butterworth
     "wacky_weather":      "SOYHLrjzK2X1ezoPC6cr",   # Harry — Captain Rick Stormborn
     "wacky_alien":        "SAz9YHcvj6GT2YYXdXww",   # River — Zephyr-7
+    "voice_1":            "mKoqwDP2laxTdq1gEgU6",
+    "voice_2":            "CeNX9CMwmxDxUF5Q2Inm",
+    "voice_3":            "PsEYifg5ra2YMbPGwhb3",
+    "voice_4":            "HfRP3cIhYLmeNHeTvkWK",
+    "voice_5":            "RwGCfIzuc2tIJySQj0fD",
 }
 
 

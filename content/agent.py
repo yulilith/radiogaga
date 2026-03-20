@@ -45,6 +45,7 @@ class BaseChannel(ABC):
         self.max_history = config.get("HISTORY_WINDOW", 8)
         self._cancelled = False
         self.session_memory = None
+        self._friends_tracker = None
 
         self._output_queue: asyncio.Queue[ContentChunk] = asyncio.Queue(maxsize=2)
         self._interrupted = asyncio.Event()
@@ -88,6 +89,9 @@ class BaseChannel(ABC):
     def set_session_memory(self, session_memory):
         self.session_memory = session_memory
 
+    def set_friends_tracker(self, friends_tracker):
+        self._friends_tracker = friends_tracker
+
     async def get_prompt_context(self, subchannel: str) -> dict:
         return await self.context.get_context()
 
@@ -100,6 +104,11 @@ class BaseChannel(ABC):
 SESSION MEMORY:
 {guidance}
 """
+
+    def get_friends_context(self) -> str:
+        if not self._friends_tracker:
+            return ""
+        return self._friends_tracker.build_broadcast_context()
 
     async def stream_content(self, subchannel: str) -> AsyncGenerator[ContentChunk, None]:
         """Generate a continuous stream of content chunks."""

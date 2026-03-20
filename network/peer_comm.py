@@ -121,3 +121,12 @@ def msg_callin_forward(transcript: str, caller_agent_id: str) -> dict:
 
 def msg_channel_sync(channel: str, subchannel: str) -> dict:
     return {"type": "channel_sync", "channel": channel, "subchannel": subchannel}
+
+def msg_status_update(agent_id: str, agent_name: str, channel: str,
+                      subchannel: str, activity: str) -> dict:
+    return {"type": "status_update", "agent_id": agent_id,
+            "agent_name": agent_name, "channel": channel,
+            "subchannel": subchannel, "activity": activity}
+
+def msg_status_request(agent_id: str) -> dict:
+    return {"type": "status_request", "agent_id": agent_id}
