@@ -398,18 +398,15 @@ def _run_eink():
         logger.error("E-ink display not available")
         return
 
-    add_waveform_to_display(dc)
-
+    # DisplayController already starts its own waveform loop in __init__,
+    # so we just set the labels via update() and let it run.
     try:
         logger.info("Starting waveform on e-ink (Ctrl+C to stop)")
-        dc.start_waveform("TALK SHOW", "FM 101.3", fps=3)
+        dc.update(channel="TALK SHOW", subchannel="FM 101.3")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        dc.stop_waveform()
-        time.sleep(0.5)
-        dc.clear()
-        dc.sleep()
+        dc.cleanup()
         logger.info("Waveform stopped")
 
 
